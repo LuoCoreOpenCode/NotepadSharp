@@ -50,6 +50,7 @@ https://github.com/<owner>/<repo>/releases/latest/download/NotepadSharp-<版本>
 
 `releases/latest` 永远指向最新一版，所以地址写死即可，不用查 API、也不用把下载地址编进程序。
 程序按清单里的 `sha256` 校验安装包，再拉起 Inno Setup 静默安装并重启。
+下载进度写在状态栏；这台机器实测 GitHub CDN 只有几十 KB/s，8 MB 的安装包要下几分钟，所以清单请求 20 秒超时、安装包下载 20 分钟超时。
 
 - 代码位置：`NotepadSharp/Services/UpdateService.cs`（换仓库改 `GithubOwner` / `GithubRepo`）
 - 调试时可用环境变量 `NOTEPADSHARP_UPDATE_MANIFEST` 指向别的清单地址
@@ -59,12 +60,14 @@ https://github.com/<owner>/<repo>/releases/latest/download/NotepadSharp-<版本>
 推一个 tag 就行，GitHub Actions 会在 Windows runner 上跑同一个 `build.ps1` 并把产物发布成 Release：
 
 ```powershell
-git tag -a v1.0.1 -m "修了标签拖拽偶发丢失"
+# 版本号 = tag 去掉前缀 v；更新说明 = 这条 tag 所指提交的标题首行
+git commit -am "修了标签拖拽偶发丢失"
+git tag v1.0.1
+git push origin main
 git push origin v1.0.1
 ```
 
-tag 的标题会自动填进清单的 `notes`，也就是用户在更新弹窗里看到的说明。
-流水线见 `.github/workflows/release.yml`，也可以在工作流页面手动触发。
+流水线见 `.github/workflows/release.yml`，也可以在工作流页面手动触发（填版本号和更新说明，不建 tag）。
 
 ## 目录结构
 

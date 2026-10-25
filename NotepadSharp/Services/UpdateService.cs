@@ -27,7 +27,13 @@ public static class UpdateService
     private static string ReleaseDownloadRoot =>
         $"https://github.com/{GithubOwner}/{GithubRepo}/releases/latest/download";
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
+    /// <summary>清单是个小 json，20 秒拿不到就当网络不通，别让用户干等</summary>
+    private static readonly TimeSpan ManifestTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>安装包 8 MB，GitHub CDN 在国内实测只有 20~40 KB/s，一次下载能拖到 5 分钟以上</summary>
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(20) };
+
+    private static int _checkRunning;
 
     private sealed record UpdateManifest(string Version, string File, string Sha256, string Notes);
 
@@ -49,6 +55,20 @@ public static class UpdateService
     /// 没有新版本或网络不通时完全不打扰用户，只在确实有更新时才弹窗。
     /// </summary>
     public static async Task CheckForUpdatesAsync(Window owner, bool showUpToDateDialog, Action<string>? progress = null)
+    {
+        // 下载期间界面不阻塞，用户能再点一次「检查更新」；两份安装包并排写同一个临时文件会互相踩
+        if (Interlocked.CompareExchange(ref _checkRunning, 1, 0) != 0) return;
+        try
+        {
+            await CheckCoreAsync(owner, showUpToDateDialog, progress);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _checkRunning, 0);
+        }
+    }
+
+    private static async Task CheckCoreAsync(Window owner, bool showUpToDateDialog, Action<string>? progress)
     {
         UpdateManifest? manifest;
         try
@@ -83,8 +103,9 @@ public static class UpdateService
         string setupPath;
         try
         {
-            progress?.Invoke($"正在下载 {manifest.File} …");
-            setupPath = await DownloadAsync(manifest);
+            // 下载在池线程上推进，而 progress 直接写状态栏控件，必须先回 UI 线程
+            Action<string> report = text => owner.Dispatcher.BeginInvoke(new Action(() => progress?.Invoke(text)));
+            setupPath = await DownloadAsync(manifest, report);
         }
         catch (Exception ex)
         {
@@ -139,7 +160,8 @@ public static class UpdateService
         var url = string.IsNullOrWhiteSpace(overrideUrl)
             ? $"{ReleaseDownloadRoot}/latest.json"
             : overrideUrl;
-        var json = await Http.GetStringAsync(url).ConfigureAwait(false);
+        using var cts = new CancellationTokenSource(ManifestTimeout);
+        var json = await Http.GetStringAsync(url, cts.Token).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         return new UpdateManifest(
@@ -159,7 +181,7 @@ public static class UpdateService
         return string.Empty;
     }
 
-    private static async Task<string> DownloadAsync(UpdateManifest manifest)
+    private static async Task<string> DownloadAsync(UpdateManifest manifest, Action<string>? progress)
     {
         // file 写成完整 URL 时直接用它（指向别的下载源），否则按「最新 Release 的附件」拼
         var url = manifest.File.StartsWith("http", StringComparison.OrdinalIgnoreCase)
@@ -168,11 +190,37 @@ public static class UpdateService
         var target = Path.Combine(Path.GetTempPath(), Path.GetFileName(manifest.File));
         if (File.Exists(target)) File.Delete(target);
 
-        await using (var http = await Http.GetStreamAsync(url).ConfigureAwait(false)
-                     ?? throw new IOException("下载返回空内容"))
+        // ResponseHeadersRead：拿到响应头就能读 Content-Length，边下边报进度，不用等整包进内存
+        using var response = await Http
+            .GetAsync(url, HttpCompletionOption.ResponseHeadersRead)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var total = response.Content.Headers.ContentLength ?? -1L;
+
+        const int reportEveryPercent = 5;
+        var lastReported = -reportEveryPercent;
+        long done = 0;
+
+        await using (var http = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
         await using (var file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
-            await http.CopyToAsync(file).ConfigureAwait(false);
+            var buffer = new byte[64 * 1024];
+            while (true)
+            {
+                var read = await http.ReadAsync(buffer).ConfigureAwait(false);
+                if (read == 0) break;
+                await file.WriteAsync(buffer.AsMemory(0, read)).ConfigureAwait(false);
+                done += read;
+                if (total > 0)
+                {
+                    var percent = (int)(done * 100 / total);
+                    if (percent - lastReported >= reportEveryPercent || percent == 100)
+                    {
+                        lastReported = percent;
+                        progress?.Invoke($"正在下载 {manifest.Version} 安装包 … {percent}%（{HumanSize(done)} / {HumanSize(total)}）");
+                    }
+                }
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(manifest.Sha256))
@@ -184,6 +232,19 @@ public static class UpdateService
         }
 
         return target;
+    }
+
+    private static string HumanSize(long bytes)
+    {
+        string[] units = { "B", "KB", "MB", "GB" };
+        double v = bytes;
+        var i = 0;
+        while (v >= 1024 && i < units.Length - 1)
+        {
+            v /= 1024;
+            i++;
+        }
+        return i == 0 ? $"{bytes} {units[i]}" : $"{v:0.#} {units[i]}";
     }
 
     /// <summary>点分十进制逐段比较，段数不等时缺的按 0 算（1.1 比 1.0.9 新）</summary>
