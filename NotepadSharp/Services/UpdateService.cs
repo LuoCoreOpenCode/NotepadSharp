@@ -12,19 +12,20 @@ using MessageBox = System.Windows.MessageBox;
 namespace NotepadSharp.Services;
 
 /// <summary>
-/// 走 Gitee 的自动更新。清单读仓库里的 release/latest.json，安装包读 Release 附件直链，
-/// 两边都是拼出来的固定 URL：Gitee 的 releases API 只返回自动生成的源码包，看不到手动上传的附件，
-/// 所以不能靠 API 发现下载地址。
+/// 走 GitHub Releases 的自动更新。清单和安装包都用「最新 Release 的固定附件直链」：
+/// https://github.com/&lt;owner&gt;/&lt;repo&gt;/releases/latest/download/&lt;asset&gt;
+/// 这个地址匿名可访问、永远指向最新一版，所以不需要查 API，也不用把下载地址写进代码。
+/// 清单 latest.json 由打包流水线（.github/workflows/release.yml）作为附件一起传上去。
 /// </summary>
 public static class UpdateService
 {
-    /// <summary>发布前把这里换成自己的 Gitee 用户名（仓库在个人空间下就是登录名）</summary>
-    public const string GiteeOwner = "luo";
+    public const string GithubOwner = "LuoCoreOpenCode";
 
-    public const string GiteeRepo = "NotepadSharp";
+    public const string GithubRepo = "NotepadSharp";
 
-    /// <summary>latest.json 所在分支，要和 build.ps1 产出的清单提交位置一致</summary>
-    public const string ManifestBranch = "master";
+    /// <summary>清单和安装包所在仓库的下载根地址</summary>
+    private static string ReleaseDownloadRoot =>
+        $"https://github.com/{GithubOwner}/{GithubRepo}/releases/latest/download";
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
@@ -136,7 +137,7 @@ public static class UpdateService
         // 留一个环境变量口子：内部试用时可以指向自己的镜像源或本地测试服务
         var overrideUrl = Environment.GetEnvironmentVariable("NOTEPADSHARP_UPDATE_MANIFEST");
         var url = string.IsNullOrWhiteSpace(overrideUrl)
-            ? $"https://gitee.com/{GiteeOwner}/{GiteeRepo}/raw/{ManifestBranch}/release/latest.json"
+            ? $"{ReleaseDownloadRoot}/latest.json"
             : overrideUrl;
         var json = await Http.GetStringAsync(url).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
@@ -160,10 +161,10 @@ public static class UpdateService
 
     private static async Task<string> DownloadAsync(UpdateManifest manifest)
     {
-        // file 写成完整 URL 时直接用它（指向别的下载源），否则按 Gitee 的附件直链契约拼
+        // file 写成完整 URL 时直接用它（指向别的下载源），否则按「最新 Release 的附件」拼
         var url = manifest.File.StartsWith("http", StringComparison.OrdinalIgnoreCase)
             ? manifest.File
-            : $"https://gitee.com/{GiteeOwner}/{GiteeRepo}/releases/download/{manifest.Version}/{manifest.File}";
+            : $"{ReleaseDownloadRoot}/{manifest.File}";
         var target = Path.Combine(Path.GetTempPath(), Path.GetFileName(manifest.File));
         if (File.Exists(target)) File.Delete(target);
 

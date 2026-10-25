@@ -41,13 +41,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 ## 自动更新
 
-程序启动 5 秒后静默检查一次，帮助菜单里也可以手动检查。清单固定读
-`https://gitee.com/<owner>/<repo>/raw/<branch>/release/latest.json`，
-安装包按清单里的 `file` + `sha256` 下载校验，再拉起 Inno Setup 静默安装并重启。
+程序启动 5 秒后静默检查一次，帮助菜单里也可以手动检查。清单和安装包都走 GitHub 的固定附件直链：
 
-- 代码位置：`NotepadSharp/Services/UpdateService.cs`
-- 换仓库时要改 `GiteeOwner` / `GiteeRepo` / `ManifestBranch` 三个常量
+```
+https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+https://github.com/<owner>/<repo>/releases/latest/download/NotepadSharp-<版本>-setup.exe
+```
+
+`releases/latest` 永远指向最新一版，所以地址写死即可，不用查 API、也不用把下载地址编进程序。
+程序按清单里的 `sha256` 校验安装包，再拉起 Inno Setup 静默安装并重启。
+
+- 代码位置：`NotepadSharp/Services/UpdateService.cs`（换仓库改 `GithubOwner` / `GithubRepo`）
 - 调试时可用环境变量 `NOTEPADSHARP_UPDATE_MANIFEST` 指向别的清单地址
+
+## 发版
+
+推一个 tag 就行，GitHub Actions 会在 Windows runner 上跑同一个 `build.ps1` 并把产物发布成 Release：
+
+```powershell
+git tag -a v1.0.1 -m "修了标签拖拽偶发丢失"
+git push origin v1.0.1
+```
+
+tag 的标题会自动填进清单的 `notes`，也就是用户在更新弹窗里看到的说明。
+流水线见 `.github/workflows/release.yml`，也可以在工作流页面手动触发。
 
 ## 目录结构
 
@@ -61,8 +78,8 @@ NotepadSharp/
   Views/          对比窗口等独立窗口
   VsDlls/         内联的 VS 停靠内核
 packaging/        Inno Setup 脚本与中文语言文件
-release/          更新清单 latest.json
 build.ps1         一键 publish + 编译安装包 + 生成清单
+.github/workflows/release.yml   推 tag 自动构建并发布
 ```
 
 ## 许可
