@@ -1,0 +1,13 @@
+# 构建产物
+bin/
+obj/
+artifacts/
+
+# IDE 与本地状态
+.vs/
+*.user
+*.sln.DotSettings.user
+.loomy-attachments/
+
+# 本地演示/测试数据
+_demo/

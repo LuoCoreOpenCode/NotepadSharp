@@ -1,0 +1,51 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <AssemblyName>NotepadSharp</AssemblyName>
+    <RootNamespace>NotepadSharp</RootNamespace>
+    <!-- 停靠内核是 VS 的 Shell dll，已随仓库内联在 VsDlls\，编译期不再依赖本机 VS 安装路径 -->
+    <VsDockLibrariesPath>$(MSBuildProjectDirectory)\VsDlls</VsDockLibrariesPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Scintilla.NET" Version="5.3.2.9" />
+    <PackageReference Include="Markdig" Version="0.37.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.VisualStudio.Shell.ViewManager">
+      <HintPath>$(VsDockLibrariesPath)\Microsoft.VisualStudio.Shell.ViewManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 停靠内核随包发布到输出目录 VsDlls\，运行时由 VsShellBootstrap 从这里加载 -->
+    <Content Include="VsDlls\*.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="app.manifest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Remove="Resources\VsDockTheme.xaml" />
+    <None Include="Resources\VsDockTheme.xaml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\Icons\*.png" />
+  </ItemGroup>
+
+</Project>

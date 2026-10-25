@@ -1,0 +1,201 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vs="clr-namespace:Microsoft.VisualStudio.PlatformUI.Shell.Controls;assembly=Microsoft.VisualStudio.Shell.ViewManager"
+                    xmlns:app="clr-namespace:NotepadSharp.Services;assembly=NotepadSharp">
+
+  <!--
+    Visual Studio 停靠内核（ViewManager.dll）的控件模板。
+    颜色全部走 DynamicResource，跟随程序的亮/暗主题切换。
+  -->
+
+  <Style x:Key="{x:Type vs:ViewFrame}" TargetType="{x:Type vs:ViewFrame}">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type vs:ViewFrame}">
+          <ContentPresenter Content="{TemplateBinding Content}"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ==================== 浮动窗口 ==================== -->
+  <Style x:Key="{x:Type vs:FloatingWindow}" TargetType="{x:Type vs:FloatingWindow}"
+         BasedOn="{StaticResource {x:Type vs:CustomChromeWindow}}">
+    <Setter Property="MinWidth" Value="160"/>
+    <Setter Property="MinHeight" Value="100"/>
+    <Setter Property="Content" Value="{Binding}"/>
+    <Setter Property="vs:FloatingWindow.ViewSite" Value="{Binding}"/>
+    <Setter Property="Background" Value="{DynamicResource BackgroundBrush}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type vs:FloatingWindow}">
+          <Border Background="{TemplateBinding Background}"
+                  BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="28"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+
+              <Grid Grid.Row="0" Background="{DynamicResource PanelBackground}">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <vs:DragUndockHeader Grid.Column="0" ViewElement="{Binding Child}" IsWindowTitleBar="True">
+                  <Grid Background="{DynamicResource PanelBackground}">
+                    <TextBlock Margin="8,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextBrush}">
+                      <TextBlock.Text>
+                        <PriorityBinding>
+                          <Binding Path="Child.Title"/>
+                          <Binding Path="Child.SelectedElement.Title"/>
+                        </PriorityBinding>
+                      </TextBlock.Text>
+                    </TextBlock>
+                  </Grid>
+                </vs:DragUndockHeader>
+
+                <Button Grid.Column="1" Content="&#x2715;" Width="34" Height="26"
+                        FontSize="12" BorderThickness="0" Background="Transparent"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        ToolTip="关闭"
+                        Command="{x:Static app:VsDockCommands.CloseFloatingView}"
+                        CommandParameter="{Binding Child}"/>
+              </Grid>
+
+              <AdornerDecorator Grid.Row="1">
+                <ContentPresenter ContentSource="Content"/>
+              </AdornerDecorator>
+            </Grid>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ==================== 文档标签组 ==================== -->
+  <Style x:Key="{x:Type vs:DocumentGroupControl}" TargetType="{x:Type vs:DocumentGroupControl}">
+    <Setter Property="Background" Value="{DynamicResource EditorBackgroundBrush}"/>
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    <Setter Property="ItemsControl.ItemTemplate"
+            Value="{DynamicResource {x:Static vs:DocumentGroupControl.ItemTemplateKey}}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type vs:DocumentGroupControl}">
+          <vs:DockTarget Name="PART_MainDockTarget" DockSiteType="NonDraggable"
+                         DockTargetType="Inside" Background="Transparent">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Border Grid.Row="0" Background="{DynamicResource PanelBackground}"
+                      BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                <vs:DockTarget DockTargetType="InsertTabPreview" Background="Transparent"
+                               AdornmentTarget="{Binding ElementName=PART_MainDockTarget}">
+                  <vs:DocumentTabPanel Name="PART_TabPanel" IsItemsHost="True"/>
+                </vs:DockTarget>
+              </Border>
+              <Border Name="PART_ContentPanel" Grid.Row="1" Background="{TemplateBinding Background}">
+                <ContentPresenter Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
+              </Border>
+            </Grid>
+          </vs:DockTarget>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="{x:Static vs:DocumentGroupControl.TabItemStyleKey}" TargetType="{x:Type TabItem}">
+    <Setter Property="Padding" Value="10,5"/>
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type TabItem}">
+          <!-- 顶栏粗细恒定：选中态只换颜色。改 BorderThickness 会让标签高度跳 2px，
+               拖拽时选中态反复变化，整条标签栏就跟着上下闪。 -->
+          <Border x:Name="Bd" Background="{DynamicResource PanelBackground}"
+                  BorderBrush="Transparent" BorderThickness="0,2,1,0">
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+            </Border>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource EditorBackgroundBrush}"/>
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SelectionBrush}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- ==================== 工具标签组（浮动时成组显示） ==================== -->
+  <Style x:Key="{x:Type vs:TabGroupControl}" TargetType="{x:Type vs:TabGroupControl}">
+    <Setter Property="Background" Value="{DynamicResource EditorBackgroundBrush}"/>
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    <Setter Property="ItemsControl.ItemTemplate">
+      <Setter.Value>
+        <DataTemplate>
+          <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+        </DataTemplate>
+      </Setter.Value>
+    </Setter>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type vs:TabGroupControl}">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Background="{DynamicResource PanelBackground}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+              <vs:DockTarget DockTargetType="InsertTabPreview" Background="Transparent">
+                <vs:ReorderTabPanel Name="PART_TabPanel" IsItemsHost="True"/>
+              </vs:DockTarget>
+            </Border>
+            <Border Name="PART_ContentPanel" Grid.Row="1" Background="{TemplateBinding Background}">
+              <ContentPresenter Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
+            </Border>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="{x:Static vs:TabGroupControl.TabItemStyleKey}" TargetType="{x:Type TabItem}">
+    <Setter Property="Padding" Value="8,4"/>
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type TabItem}">
+          <Border x:Name="Bd" Background="{DynamicResource PanelBackground}"
+                  BorderBrush="Transparent" BorderThickness="0,2,1,0">
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+            </Border>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource EditorBackgroundBrush}"/>
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SelectionBrush}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+</ResourceDictionary>

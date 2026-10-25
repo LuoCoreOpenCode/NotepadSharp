@@ -1,0 +1,621 @@
+﻿<Window x:Class="NotepadSharp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:NotepadSharp.Controls"
+        xmlns:models="clr-namespace:NotepadSharp.Models"
+        xmlns:conv="clr-namespace:NotepadSharp.Converters"
+        mc:Ignorable="d"
+        Title="NotepadSharp" Height="720" Width="1200"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource TextBrush}"
+        PreviewKeyDown="OnWindowKeyDown"
+        Closing="OnWindowClosing"
+        Closed="OnWindowClosed">
+
+    <Window.Resources>
+        <conv:FileIconColorConverter x:Key="FileIconColor"/>
+
+        <!-- 停靠标签头：图标 + 标题（带未保存圆点）+ 锁定图钉 + 关闭。
+             按钮必须拦截 PreviewMouseDown，否则会被 VS 的 DragUndockHeader 当成拖拽起点 -->
+        <DataTemplate x:Key="DocumentTabHeaderTemplate">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Path Data="{StaticResource IconFile}"
+                      Fill="{Binding FilePath, Converter={StaticResource FileIconColor}}"
+                      Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <TextBlock Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <Button x:Name="LockPin" Tag="{Binding}"
+                        PreviewMouseLeftButtonDown="OnTabHeaderButtonPreviewMouseDown"
+                        PreviewMouseLeftButtonUp="OnTabLockPreviewMouseUp"
+                        Style="{DynamicResource IconOnlyButtonStyle}"
+                        Margin="5,0,0,0" VerticalAlignment="Center"
+                        ToolTip="锁定标签（Ctrl+Alt+T）">
+                    <TextBlock x:Name="PinGlyph" FontFamily="Segoe MDL2 Assets" Text="&#xE718;"
+                               FontSize="12" Foreground="{DynamicResource AccentBrush}"
+                               RenderTransformOrigin="0.5,0.5">
+                        <TextBlock.RenderTransform>
+                            <RotateTransform Angle="-90"/>
+                        </TextBlock.RenderTransform>
+                    </TextBlock>
+                </Button>
+                <Button Tag="{Binding}"
+                        PreviewMouseLeftButtonDown="OnTabHeaderButtonPreviewMouseDown"
+                        PreviewMouseLeftButtonUp="OnTabClosePreviewMouseUp"
+                        Style="{DynamicResource IconOnlyButtonStyle}"
+                        Margin="2,0,0,0" VerticalAlignment="Center"
+                        ToolTip="关闭标签">
+                    <TextBlock Text="&#x2715;" FontSize="10"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </Button>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsLocked}" Value="True">
+                    <Setter TargetName="PinGlyph" Property="Text" Value="&#xE840;"/>
+                    <Setter TargetName="PinGlyph" Property="RenderTransform">
+                        <Setter.Value>
+                            <RotateTransform Angle="-45"/>
+                        </Setter.Value>
+                    </Setter>
+                    <Setter TargetName="LockPin" Property="ToolTip" Value="解锁标签（Ctrl+Alt+T）"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- 文件树节点模板 -->
+        <HierarchicalDataTemplate x:Key="FileTreeItemTemplate" DataType="{x:Type models:FileNode}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal">
+                <Path x:Name="Icon" Data="{StaticResource IconFile}"
+                      Fill="{Binding Converter={StaticResource FileIconColor}}"
+                      Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" ToolTip="{Binding FullPath}"/>
+            </StackPanel>
+            <HierarchicalDataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                    <Setter TargetName="Icon" Property="Data" Value="{StaticResource IconFolder}"/>
+                </DataTrigger>
+            </HierarchicalDataTemplate.Triggers>
+        </HierarchicalDataTemplate>
+
+        <!-- 工具栏图标按钮 -->
+        <Style x:Key="ToolIconButton" TargetType="Button">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource SelectionBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 工具栏「固定置顶」开关：IsChecked 直接双向绑到 Window.Topmost，
+             两个图钉叠在同一位置按选中态互换，所以按钮宽度不随点击跳动 -->
+        <Style x:Key="ToolPinButton" TargetType="ToggleButton">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="4">
+                            <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock x:Name="PinIdle" Text="&#xE718;" FontFamily="Segoe MDL2 Assets"
+                                           FontSize="15" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           RenderTransformOrigin="0.5,0.5">
+                                    <TextBlock.RenderTransform><RotateTransform Angle="-90"/></TextBlock.RenderTransform>
+                                </TextBlock>
+                                <TextBlock x:Name="PinOn" Text="&#xE840;" FontFamily="Segoe MDL2 Assets"
+                                           FontSize="15" Visibility="Collapsed"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           RenderTransformOrigin="0.5,0.5">
+                                    <TextBlock.RenderTransform><RotateTransform Angle="-45"/></TextBlock.RenderTransform>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource SelectionBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="PinIdle" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="PinOn" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource SelectionBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ToolSeparator" TargetType="Border">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Background" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="Margin" Value="5,5"/>
+        </Style>
+
+        <Style x:Key="StatusBarTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,18,0"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True">
+
+        <!-- ==================== 菜单栏 ==================== -->
+        <Menu DockPanel.Dock="Top" Background="{DynamicResource PanelBackground}"
+              Foreground="{DynamicResource TextBrush}">
+            <MenuItem Header="文件(_F)">
+                <MenuItem Header="新建" Command="{Binding NewFileCommand}" InputGestureText="Ctrl+N"/>
+                <MenuItem Header="打开..." Command="{Binding OpenFileCommand}" InputGestureText="Ctrl+O"/>
+                <Separator/>
+                <MenuItem Header="保存" Command="{Binding SaveFileCommand}" InputGestureText="Ctrl+S"/>
+                <MenuItem Header="另存为..." Command="{Binding SaveAsCommand}" InputGestureText="Ctrl+Shift+S"/>
+                <MenuItem Header="全部保存" Command="{Binding SaveAllCommand}"/>
+                <Separator/>
+                <MenuItem Header="关闭当前文件" Command="{Binding CloseFileCommand}" InputGestureText="Ctrl+W"/>
+                <MenuItem Header="关闭全部文件" Command="{Binding CloseAllCommand}"/>
+                <MenuItem Header="锁定 / 解锁标签" Command="{Binding ToggleTabLockCommand}" InputGestureText="Ctrl+Alt+T"/>
+                <Separator/>
+                <MenuItem Header="最近文件" x:Name="RecentFilesMenu"/>
+                <Separator/>
+                <MenuItem Header="退出" Command="{Binding ExitCommand}"/>
+            </MenuItem>
+
+            <MenuItem Header="编辑(_E)">
+                <MenuItem Header="撤销" Command="{Binding UndoCommand}" InputGestureText="Ctrl+Z"/>
+                <MenuItem Header="重做" Command="{Binding RedoCommand}" InputGestureText="Ctrl+Y"/>
+                <Separator/>
+                <MenuItem Header="剪切" Command="{Binding CutCommand}" InputGestureText="Ctrl+X"/>
+                <MenuItem Header="复制" Command="{Binding CopyCommand}" InputGestureText="Ctrl+C"/>
+                <MenuItem Header="粘贴" Command="{Binding PasteCommand}" InputGestureText="Ctrl+V"/>
+                <Separator/>
+                <MenuItem Header="全选" Command="{Binding SelectAllCommand}" InputGestureText="Ctrl+A"/>
+                <Separator/>
+                <MenuItem Header="切换行注释" Command="{Binding ToggleCommentCommand}" InputGestureText="Ctrl+/"/>
+                <MenuItem Header="转换为大写" Command="{Binding UpperCaseCommand}"/>
+                <MenuItem Header="转换为小写" Command="{Binding LowerCaseCommand}"/>
+            </MenuItem>
+
+            <MenuItem Header="查找(_S)">
+                <MenuItem Header="查找 / 替换..." Command="{Binding FindCommand}" InputGestureText="Ctrl+F"/>
+                <Separator/>
+                <MenuItem Header="查找下一个" Command="{Binding FindNextCommand}" InputGestureText="F3"/>
+                <MenuItem Header="查找上一个" Command="{Binding FindPreviousCommand}" InputGestureText="Shift+F3"/>
+                <Separator/>
+                <MenuItem Header="在文件中查找 / 替换..." Click="OnShowDirFind" InputGestureText="Ctrl+Shift+A"/>
+                <Separator/>
+                <MenuItem Header="查找全部（结果列表）" Click="OnFindAllInFile" InputGestureText="Ctrl+Alt+F"/>
+                <MenuItem Header="批量查找（多关键词）…" Click="OnBatchFind" InputGestureText="Ctrl+Alt+K"/>
+                <Separator/>
+                <MenuItem Header="转到行..." Command="{Binding GoToLineCommand}" InputGestureText="Ctrl+G"/>
+            </MenuItem>
+
+            <MenuItem Header="格式(_A)" x:Name="FormatMenu"/>
+
+            <MenuItem Header="视图(_V)">
+                <MenuItem Header="折叠所有" Command="{Binding CollapseAllCommand}"/>
+                <MenuItem Header="展开所有" Command="{Binding ExpandAllCommand}"/>
+                <Separator/>
+                <MenuItem Header="自动换行" IsCheckable="True" x:Name="MenuWordWrap" Command="{Binding ToggleWordWrapCommand}"/>
+                <MenuItem Header="显示空白字符" IsCheckable="True" x:Name="MenuWhitespace" Command="{Binding ToggleWhitespaceCommand}"/>
+                <MenuItem Header="显示行尾符" IsCheckable="True" x:Name="MenuEol" Command="{Binding ToggleEolCommand}"/>
+                <MenuItem Header="显示缩进参考线" IsCheckable="True" x:Name="MenuIndentGuide" Command="{Binding ToggleIndentGuideCommand}"/>
+                <Separator/>
+                <MenuItem Header="放大字号" Command="{Binding ZoomInCommand}" InputGestureText="Ctrl+="/>
+                <MenuItem Header="缩小字号" Command="{Binding ZoomOutCommand}" InputGestureText="Ctrl+-"/>
+                <MenuItem Header="重置字号" Command="{Binding ZoomResetCommand}" InputGestureText="Ctrl+0"/>
+                <Separator/>
+                <MenuItem Header="文件列表" Command="{Binding ToggleFileTreeCommand}"/>
+                <MenuItem Header="书签列表" Command="{Binding ToggleBookmarkBarCommand}"/>
+                <MenuItem Header="Markdown 预览" Command="{Binding ToggleMarkdownCommand}"/>
+                <Separator/>
+                <MenuItem Header="浮动当前标签" Click="OnFloatCurrentTab"/>
+                <MenuItem Header="停靠当前标签" Click="OnDockCurrentTab"/>
+                <MenuItem Header="向右新建标签组" Click="OnNewVerticalTabGroup"/>
+                <MenuItem Header="向下新建标签组" Click="OnNewHorizontalTabGroup"/>
+                <MenuItem Header="全部停靠（重置布局）" Click="OnResetDockLayout"/>
+                <Separator/>
+                <MenuItem Header="固定置顶" IsCheckable="True" Command="{Binding ToggleTopmostCommand}"
+                          IsChecked="{Binding Topmost, Mode=OneWay}" InputGestureText="Ctrl+Alt+P"/>
+            </MenuItem>
+
+            <MenuItem Header="编码(_N)">
+                <MenuItem Header="转换编码(_C)" x:Name="ConvertEncodingMenu"
+                          ToolTip="只改变保存时使用的编码，屏幕内容不变"/>
+                <MenuItem Header="按编码重新载入(_R)" x:Name="ReloadEncodingMenu"/>
+                <Separator/>
+                <MenuItem Header="增加 BOM" x:Name="MenuBom" Click="OnToggleBom"/>
+                <MenuItem Header="只读模式" IsCheckable="True" x:Name="MenuReadOnly" Click="OnToggleReadOnly"/>
+                <Separator/>
+                <MenuItem Header="以十六进制视图重新打开" Click="OnReopenAsHex"/>
+                <MenuItem Header="以文本方式重新打开" Click="OnReopenAsText"/>
+            </MenuItem>
+
+            <MenuItem Header="语法(_Y)" x:Name="LanguageMenu"/>
+
+            <MenuItem Header="设置(_T)">
+                <MenuItem Header="亮色主题" Command="{Binding LightThemeCommand}"/>
+                <MenuItem Header="暗色主题" Command="{Binding DarkThemeCommand}"/>
+                <Separator/>
+                <MenuItem Header="打开设置目录" Command="{Binding OpenSettingsFolderCommand}"/>
+            </MenuItem>
+
+            <MenuItem Header="列与宏(_L)">
+                <MenuItem Header="列编辑（多行插入）…" Click="OnColumnEdit"/>
+                <MenuItem Header="选中行行首插入序号" Click="OnInsertLineNumbers"/>
+                <Separator/>
+                <MenuItem Header="提示：先按住 Alt 拖动框选一列，再执行列编辑" IsEnabled="False"/>
+            </MenuItem>
+
+            <MenuItem Header="对比(_C)">
+                <MenuItem Header="文件对比…" Click="OnCompareFiles" InputGestureText="Ctrl+Shift+R"/>
+                <MenuItem Header="与磁盘版本对比当前文件" Click="OnCompareWithDisk"/>
+                <MenuItem Header="目录对比…" Click="OnDirCompare"/>
+                <MenuItem Header="用外部工具对比（WinMerge）…" Click="OnCompareWithExternalTool"/>
+            </MenuItem>
+
+            <MenuItem Header="工具(_O)">
+                <MenuItem Header="显示/隐藏 文件列表" Command="{Binding ToggleFileTreeCommand}"/>
+                <MenuItem Header="显示/隐藏 书签列表" Command="{Binding ToggleBookmarkBarCommand}"/>
+                <Separator/>
+                <MenuItem Header="清除所有书签" Command="{Binding ClearBookmarksCommand}"/>
+                <MenuItem Header="全部标记书签" Command="{Binding MarkAllCommand}"/>
+                <MenuItem Header="清除查找高亮" Command="{Binding ClearHighlightCommand}"/>
+                <Separator/>
+                <MenuItem Header="重新加载文件" Command="{Binding ReloadFileCommand}"/>
+                <MenuItem Header="打开所在文件夹" Command="{Binding OpenFolderCommand}"/>
+                <MenuItem Header="在文件目录打开 CMD" Command="{Binding OpenCmdCommand}"/>
+                <Separator/>
+                <MenuItem Header="插入日期时间" Command="{Binding InsertDateCommand}"/>
+                <MenuItem Header="字数统计" Command="{Binding StatsCommand}"/>
+                <Separator/>
+                <MenuItem Header="格式化 JSON" Command="{Binding FormatJsonCommand}"/>
+                <MenuItem Header="压缩 JSON" Command="{Binding MinifyJsonCommand}"/>
+                <MenuItem Header="格式化 XML" Command="{Binding FormatXmlCommand}"/>
+                <MenuItem Header="压缩 XML" Command="{Binding MinifyXmlCommand}"/>
+                <Separator/>
+                <MenuItem Header="计算哈希 (Md5/Sha)…" Click="OnShowHash" InputGestureText="Ctrl+Alt+H"/>
+            </MenuItem>
+
+            <MenuItem Header="帮助(_H)">
+                <MenuItem Header="检查更新…" Click="OnCheckUpdate"/>
+                <MenuItem Header="关于 NotepadSharp" Command="{Binding AboutCommand}"/>
+            </MenuItem>
+        </Menu>
+
+        <!-- ==================== 主工具栏 ==================== -->
+        <Border DockPanel.Dock="Top" Background="{DynamicResource PanelBackground}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="6,3" VerticalAlignment="Center">
+                <!-- 文件组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding NewFileCommand}" ToolTip="新建 (Ctrl+N)">
+                    <Image Source="Resources/Icons/newFile.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding OpenFileCommand}" ToolTip="打开 (Ctrl+O)">
+                    <Image Source="Resources/Icons/openFile.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding SaveFileCommand}" ToolTip="保存 (Ctrl+S)">
+                    <Image Source="Resources/Icons/saveFile.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding SaveAllCommand}" ToolTip="全部保存">
+                    <Image Source="Resources/Icons/saveAll.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding CloseFileCommand}" ToolTip="关闭当前文件 (Ctrl+W)">
+                    <Image Source="Resources/Icons/closeFile.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding CloseAllCommand}" ToolTip="关闭全部文件">
+                    <Image Source="Resources/Icons/closeAll.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 编辑组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding CutCommand}" ToolTip="剪切">
+                    <Image Source="Resources/Icons/cut.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding CopyCommand}" ToolTip="复制">
+                    <Image Source="Resources/Icons/copy.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding PasteCommand}" ToolTip="粘贴">
+                    <Image Source="Resources/Icons/paste.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding UndoCommand}" ToolTip="撤销 (Ctrl+Z)">
+                    <Image Source="Resources/Icons/undo.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding RedoCommand}" ToolTip="重做 (Ctrl+Y)">
+                    <Image Source="Resources/Icons/redo.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 查找组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding FindCommand}" ToolTip="查找 / 替换 (Ctrl+F)">
+                    <Image Source="Resources/Icons/find.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding FindNextCommand}" ToolTip="查找下一个 (F3)">
+                    <Image Source="Resources/Icons/next.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding FindPreviousCommand}" ToolTip="查找上一个 (Shift+F3)">
+                    <Image Source="Resources/Icons/pre.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 书签 / 导航组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleBookmarkCommand}" ToolTip="切换书签 (F2)">
+                    <Image Source="Resources/Icons/mark.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding NextBookmarkCommand}" ToolTip="下一个书签">
+                    <Image Source="Resources/Icons/pre.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding GoToLineCommand}" ToolTip="转到行 (Ctrl+G)">
+                    <Image Source="Resources/Icons/go.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 视图组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleWordWrapCommand}" ToolTip="自动换行">
+                    <Image Source="Resources/Icons/wrap.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleWhitespaceCommand}" ToolTip="显示空白字符">
+                    <Image Source="Resources/Icons/invisibleChar.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleIndentGuideCommand}" ToolTip="显示缩进参考线">
+                    <Image Source="Resources/Icons/indentGuide.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 面板组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleFileTreeCommand}" ToolTip="文件列表">
+                    <Image Source="Resources/Icons/fileBrowser.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleMarkdownCommand}" ToolTip="Markdown 预览">
+                    <Image Source="Resources/Icons/docList.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 缩放组 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ZoomInCommand}" ToolTip="放大字号 (Ctrl+=)">
+                    <Image Source="Resources/Icons/zoomIn.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ZoomOutCommand}" ToolTip="缩小字号 (Ctrl+-)">
+                    <Image Source="Resources/Icons/zoomOut.png" Width="16" Height="16"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 主题 -->
+                <!-- 转 HTML -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ConvertToHtmlCommand}"
+                        ToolTip="Markdown / 文本 转 HTML（结果在新标签页打开）">
+                    <Path Data="{StaticResource IconHtml}" Fill="#FF1E88E5"
+                          Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"/>
+                </Button>
+
+                <!-- JSON 格式化 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding FormatJsonCommand}"
+                        ToolTip="格式化 JSON（美化缩进）">
+                    <Path Data="{StaticResource IconFormat}" Fill="#FF2E7D32"
+                          Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"/>
+                </Button>
+
+                <!-- JSON 压缩 -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding MinifyJsonCommand}"
+                        ToolTip="压缩 JSON（去除缩进与换行）">
+                    <Path Data="{StaticResource IconMinify}" Fill="#FFE65100"
+                          Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"/>
+                </Button>
+                <Border Style="{DynamicResource ToolSeparator}"/>
+
+                <!-- 主题（移到最右边）-->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleThemeCommand}" ToolTip="切换 亮色/暗色 主题">
+                    <Path Data="{StaticResource IconTheme}" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"/>
+                </Button>
+            </StackPanel>
+
+            <!-- 工具栏右端：固定整个程序置顶 + 关闭当前标签（对齐 ndd 的标签栏右上角按钮）-->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,3,10,3">
+                <ToggleButton x:Name="TopmostPin" Style="{DynamicResource ToolPinButton}"
+                              IsChecked="{Binding Topmost, Mode=TwoWay}"
+                              Checked="OnTopmostChanged" Unchecked="OnTopmostChanged"
+                              ToolTip="固定置顶：让本程序始终在所有窗口最前 (Ctrl+Alt+P)"/>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding CloseFileCommand}"
+                        ToolTip="关闭当前标签 (Ctrl+W)" Margin="4,0,0,0">
+                    <TextBlock Text="&#x2715;" FontSize="16" FontWeight="Bold" Foreground="#E51400"/>
+                </Button>
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <!-- ==================== 左侧文件列表 ==================== -->
+        <Border x:Name="FileTreePanel" DockPanel.Dock="Left" Width="250" Visibility="Collapsed"
+                Background="{DynamicResource PanelBackground}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <Border DockPanel.Dock="Top" Padding="8,6" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                    <TextBlock Text="文件列表" FontWeight="Bold" Foreground="{DynamicResource TextBrush}"/>
+                </Border>
+                <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Padding="8,4">
+                            <TextBlock Text="最近文件" FontWeight="Bold" Foreground="{DynamicResource TextBrush}" FontSize="12"/>
+                        </Border>
+                        <ListBox x:Name="RecentFilesList" Height="120" Background="Transparent"
+                                 Foreground="{DynamicResource TextBrush}" BorderThickness="0" FontSize="12"
+                                 SelectionChanged="OnRecentFileSelected"/>
+                    </DockPanel>
+                </Border>
+                <TreeView x:Name="FileTree" Margin="4"
+                          Background="Transparent" Foreground="{DynamicResource TextBrush}" BorderThickness="0"
+                          ItemTemplate="{StaticResource FileTreeItemTemplate}"
+                          MouseDoubleClick="OnFileTreeDoubleClick"/>
+            </DockPanel>
+        </Border>
+
+        <!-- ==================== 右侧 Markdown 预览 ==================== -->
+        <Border x:Name="MarkdownPanel" DockPanel.Dock="Right" Width="380" Visibility="Collapsed"
+                Background="{DynamicResource BackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0">
+            <DockPanel>
+                <Border DockPanel.Dock="Top" Background="{DynamicResource PanelBackground}" Padding="8,6"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                    <TextBlock Text="Markdown 预览" FontWeight="Bold" Foreground="{DynamicResource TextBrush}"/>
+                </Border>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12,8">
+                    <TextBlock x:Name="MarkdownText" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextBrush}"
+                               FontFamily="Microsoft YaHei UI" FontSize="13" LineHeight="22"/>
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
+
+        <!-- ==================== 底部：查找面板 + 状态栏 ==================== -->
+        <StackPanel DockPanel.Dock="Bottom">
+            <local:FindReplacePanel x:Name="FindReplacePanel" Visibility="Collapsed"
+                                    FindRequested="OnFindRequested"
+                                    ReplaceRequested="OnReplaceRequested"
+                                    ReplaceAllRequested="OnReplaceAllRequested"
+                                    FindNextRequested="OnFindNextRequested"
+                                    FindPreviousRequested="OnFindPreviousRequested"
+                                    CloseRequested="OnFindCloseRequested"/>
+
+            <local:DirFindPanel x:Name="DirFindPanel" Visibility="Collapsed"
+                                JumpRequested="OnDirMatchJumpRequested"
+                                ReplaceCompleted="OnDirReplaceCompleted"
+                                CloseRequested="OnDirFindCloseRequested"/>
+
+            <local:SearchResultsPanel x:Name="SearchResultsPanel" Visibility="Collapsed"
+                                      JumpRequested="OnSearchHitJumpRequested"
+                                      CloseRequested="OnSearchResultsCloseRequested"/>
+
+            <Border Background="{DynamicResource PanelBackground}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                <DockPanel Margin="4,0">
+                    <TextBlock x:Name="StatusChars" Text="字符: 0" Style="{DynamicResource StatusBarTextStyle}" DockPanel.Dock="Left"/>
+                    <TextBlock x:Name="StatusLines" Text="行数: 1" Style="{DynamicResource StatusBarTextStyle}" DockPanel.Dock="Left"/>
+                    <TextBlock x:Name="StatusMessage" Text="" Style="{DynamicResource StatusBarTextStyle}" DockPanel.Dock="Left"
+                               TextTrimming="CharacterEllipsis" MaxWidth="520"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBlock x:Name="StatusModified" Text="" Foreground="Orange" FontWeight="Bold" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusReadonly" Text="" Foreground="{DynamicResource AccentBrush}" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusZoom" Text="缩放率: 100%" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusLang" Text="语法: text" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusLineCol" Text="行: 1 列: 1" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusSel" Text="选中: 0" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusEol" Text="Unix(LF)" Style="{DynamicResource StatusBarTextStyle}"/>
+                        <TextBlock x:Name="StatusEncoding" Text="UTF8" Style="{DynamicResource StatusBarTextStyle}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- ==================== 书签栏 ==================== -->
+        <Border x:Name="BookmarkBarPanel" DockPanel.Dock="Top" Visibility="Collapsed"
+                Background="{DynamicResource PanelBackground}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+            <DockPanel>
+                <TextBlock Text="书签:" VerticalAlignment="Center" Margin="8,0,6,0"
+                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"/>
+                <ListBox x:Name="BookmarkItems" Background="Transparent" BorderThickness="0"
+                         Foreground="{DynamicResource TextBrush}" FontSize="12"
+                         SelectionChanged="OnBookmarkItemSelected"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="6,2" Margin="2" CornerRadius="3"
+                                    Background="{DynamicResource SelectionBrush}" Cursor="Hand"
+                                    ToolTip="点击跳转到书签行">
+                                <TextBlock Text="{Binding Text}"/>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- ==================== 编辑器区域 ==================== -->
+        <Grid>
+            <Grid.ContextMenu>
+                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                    <MenuItem Header="新建 (_N)" Command="{Binding NewFileCommand}"/>
+                    <MenuItem Header="打开 (_O)" Command="{Binding OpenFileCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="保存 (_S)" Command="{Binding SaveFileCommand}"/>
+                    <MenuItem Header="全部保存" Command="{Binding SaveAllCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="撤销 (_Z)" Command="{Binding UndoCommand}"/>
+                    <MenuItem Header="重做 (_Y)" Command="{Binding RedoCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="剪切 (_X)" Command="{Binding CutCommand}"/>
+                    <MenuItem Header="复制 (_C)" Command="{Binding CopyCommand}"/>
+                    <MenuItem Header="粘贴 (_V)" Command="{Binding PasteCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="查找/替换 (_F)" Command="{Binding FindCommand}"/>
+                    <MenuItem Header="查找下一个 (F3)" Command="{Binding FindNextCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="书签: 切换 (F2)" Command="{Binding ToggleBookmarkCommand}"/>
+                    <MenuItem Header="下一个书签" Command="{Binding NextBookmarkCommand}"/>
+                    <MenuItem Header="上一个书签" Command="{Binding PreviousBookmarkCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="折叠所有" Command="{Binding CollapseAllCommand}"/>
+                    <MenuItem Header="展开所有" Command="{Binding ExpandAllCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="转换为大写" Command="{Binding UpperCaseCommand}"/>
+                    <MenuItem Header="转换为小写" Command="{Binding LowerCaseCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="重新加载文件" Command="{Binding ReloadFileCommand}"/>
+                    <MenuItem Header="打开所在文件夹" Command="{Binding OpenFolderCommand}"/>
+                    <MenuItem Header="插入日期时间" Command="{Binding InsertDateCommand}"/>
+                    <MenuItem Header="字数统计" Command="{Binding StatsCommand}"/>
+                    <MenuItem Header="全部标记书签" Command="{Binding MarkAllCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="格式化 JSON" Command="{Binding FormatJsonCommand}"/>
+                    <MenuItem Header="压缩 JSON" Command="{Binding MinifyJsonCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="切换 亮色/暗色 主题" Command="{Binding ToggleThemeCommand}"/>
+                </ContextMenu>
+            </Grid.ContextMenu>
+
+            <!-- 编辑区：Visual Studio 的停靠内核（ViewManager），标签可拖出浮动、拖回停靠、拖到边缘拆标签组 -->
+            <ContentControl x:Name="DockHost" Focusable="False"
+                            Background="{DynamicResource BackgroundBrush}"/>
+
+            <TextBlock x:Name="EmptyStateText"
+                       Text="没有打开的文件&#x0a;&#x0a;Ctrl+N 新建　　Ctrl+O 打开"
+                       FontSize="16" TextAlignment="Center" LineHeight="30"
+                       Foreground="{DynamicResource TextSecondaryBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
+    </DockPanel>
+
+</Window>
