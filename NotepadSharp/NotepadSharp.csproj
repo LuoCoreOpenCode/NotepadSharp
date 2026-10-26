@@ -14,6 +14,8 @@
     <RootNamespace>NotepadSharp</RootNamespace>
     <!-- 停靠内核是 VS 的 Shell dll，已随仓库内联在 VsDlls\，编译期不再依赖本机 VS 安装路径 -->
     <VsDockLibrariesPath>$(MSBuildProjectDirectory)\VsDlls</VsDockLibrariesPath>
+    <ApplicationIcon>Resources\Icons\NotepadSharp.ico</ApplicationIcon>
+    <PackageIcon>NotepadSharp.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,6 +39,10 @@
 
   <ItemGroup>
     <None Update="app.manifest" />
+    <None Update="Resources\Icons\NotepadSharp.png">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
@@ -46,6 +52,10 @@
 
   <ItemGroup>
     <Resource Include="Resources\Icons\*.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Resources\Icons\NotepadSharp.ico" />
   </ItemGroup>
 
 </Project>
