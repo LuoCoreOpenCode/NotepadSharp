@@ -20,7 +20,7 @@ public static class LexerService
         if (string.IsNullOrEmpty(ext))
         {
             if (fileName.Equals("Dockerfile", StringComparison.OrdinalIgnoreCase))
-                return "dockerfile";
+                return "bash";
             if (fileName.Equals("Makefile", StringComparison.OrdinalIgnoreCase) ||
                 fileName.Equals("GNUmakefile", StringComparison.OrdinalIgnoreCase) ||
                 fileName.Equals("makefile.mak", StringComparison.OrdinalIgnoreCase))
@@ -42,7 +42,9 @@ public static class LexerService
             ".html" or ".htm" or ".shtml" or ".xhtml" => "hypertext",
             ".xml" or ".svg" or ".xaml" or ".resx" or ".csproj" or ".slnx" => "xml",
             ".css" or ".scss" or ".less" => "css",
-            ".js" or ".mjs" or ".cjs" or ".jsx" => "javascript",
+            // Lexilla 这份构建里没有独立的 javascript / go / toml / dockerfile 词法器，
+            // 名字给错会被静默忽略（整篇没颜色），所以借用近似词法器 + 注入各自关键字表
+            ".js" or ".mjs" or ".cjs" or ".jsx" => "cpp",
             ".json" => "json",
             ".ts" or ".tsx" => "cpp",
             // Shell
@@ -56,7 +58,7 @@ public static class LexerService
             // Lua
             ".lua" => "lua",
             // Go
-            ".go" => "go",
+            ".go" => "cpp",
             // Rust
             ".rs" => "rust",
             // Swift
@@ -67,8 +69,8 @@ public static class LexerService
             ".sql" => "sql",
             // Markdown
             ".md" or ".markdown" => "markdown",
-            // TOML
-            ".toml" => "toml",
+            // TOML（键值/段落/井号注释，与 props 词法器同构）
+            ".toml" => "props",
             // YAML
             ".yaml" or ".yml" => "yaml",
             // Properties/INI
@@ -95,7 +97,7 @@ public static class LexerService
             // Matlab
             ".m" => "matlab",
             // R
-            ".r" or ".rmd" => "rscript",
+            ".r" or ".rmd" => "r",
             // VB
             ".vb" => "vb",
             // Ada
@@ -227,6 +229,7 @@ public static class LexerService
             ".py" or ".pyw" or ".pyi" => new KeywordSets(PythonKeywords, PythonBuiltins),
             ".js" or ".mjs" or ".cjs" or ".jsx" => new KeywordSets(JsKeywords, JsBuiltins),
             ".ts" or ".tsx" => new KeywordSets(TsKeywords, JsBuiltins),
+            ".go" => new KeywordSets(GoKeywords, GoBuiltins),
             ".kt" or ".kts" => new KeywordSets(KotlinKeywords, ""),
             ".swift" => new KeywordSets(SwiftKeywords, ""),
             _ => null,
@@ -315,6 +318,19 @@ public static class LexerService
         "typeof var void while with yield let static async await of as from get set " +
         "type interface enum namespace declare abstract implements private protected public readonly " +
         "any unknown never string number boolean symbol object bigint keyof infer is asserts satisfies";
+
+    private const string GoKeywords =
+        "break case chan const continue default defer else fallthrough for func go goto if import interface " +
+        "map package range return select struct switch type var break case chan const continue default defer " +
+        "else fallthrough for func go goto if import interface map package range return select struct switch " +
+        "type var nil true iota append bool byte cap close complex copy delete len make new panic print println " +
+        "recover any int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 uintptr float32 float64 string " +
+        "bool error comparable";
+
+    private const string GoBuiltins =
+        "fmt strings errors os io net http context sync atomic time strconv bytes bufio math sort json xml " +
+        "Error String Reader Writer Context WaitGroup Mutex RWMutex Channel Slice Map Array Struct Interface " +
+        "Package Import Main Init Type Kind Value";
 
     private const string KotlinKeywords =
         "as break class continue do else false for fun if in interface is null object package return " +

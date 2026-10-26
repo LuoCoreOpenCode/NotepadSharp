@@ -120,6 +120,7 @@ public partial class MainWindow : Window
 
         InitializeComponent();
         InitializeDocking();
+        EnableFileDrop(this);
         DataContext = this;
         InitializeCommands();
         BuildEncodingMenu();
@@ -186,6 +187,8 @@ public partial class MainWindow : Window
                 // 浮动窗格是独立顶层窗口，不跟着主窗口的 Topmost 走，得单独补
                 e.Window.Topmost = keepOnTop;
                 HookRaiseOnActivate(e.Window);
+                // 浮动窗格也要能接收拖进来的文件
+                EnableFileDrop(e.Window);
             }), DispatcherPriority.Background);
         };
 
@@ -234,6 +237,87 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
+
+    // 外部文件拖放：Scintilla 自己在子窗口上注册了 IDropTarget（管文本拖拽），
+    // WinForms 的 AllowDrop 抢不过它；而 OLE 在目标拒绝文件拖放时会退回传统的 WM_DROPFILES，
+    // 沿父链找注册过 DragAcceptFiles 的窗口投递 —— 实测在编辑器区域落下也能收到，且不干扰文本拖拽。
+    [DllImport("shell32.dll")]
+    private static extern void DragAcceptFiles(IntPtr hWnd, bool accept);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint DragQueryFileW(IntPtr hDrop, uint iFile, StringBuilder? buffer, uint bufferCount);
+
+    [DllImport("shell32.dll")]
+    private static extern void DragFinish(IntPtr hDrop);
+
+    private const int WM_DROPFILES = 0x0233;
+    private readonly HashSet<Window> _dropHookedWindows = new();
+
+    /// <summary>让某个顶层窗口（主窗口 / VS 停靠的浮动窗）能接收外部文件拖放</summary>
+    private void EnableFileDrop(Window window)
+    {
+        if (!_dropHookedWindows.Add(window)) return;
+        window.Closed += (_, _) => _dropHookedWindows.Remove(window);
+
+        void Hook()
+        {
+            if (PresentationSource.FromVisual(window) is not HwndSource source) return;
+            source.AddHook(DropWndProc);
+            try { DragAcceptFiles(source.Handle, true); } catch { /* 注册失败只影响拖放，不影响编辑 */ }
+        }
+
+        // 主窗口在构造时订阅（句柄还没建）；浮动窗弹出时句柄可能已经建好了，那就立刻挂钩
+        if (PresentationSource.FromVisual(window) is HwndSource) Hook();
+        else window.SourceInitialized += (_, _) => Hook();
+    }
+
+    private IntPtr DropWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WM_DROPFILES) return IntPtr.Zero;
+        var paths = ReadDroppedFiles(wParam);
+        if (paths.Count > 0) Dispatcher.BeginInvoke(new Action(() => OpenDroppedPaths(paths)));
+        return IntPtr.Zero;
+    }
+
+    private static List<string> ReadDroppedFiles(IntPtr hDrop)
+    {
+        var paths = new List<string>();
+        if (hDrop == IntPtr.Zero) return paths;
+        try
+        {
+            uint count = DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0);
+            for (uint i = 0; i < count; i++)
+            {
+                uint length = DragQueryFileW(hDrop, i, null, 0);
+                if (length == 0) continue;
+                var sb = new StringBuilder((int)length + 1);
+                if (DragQueryFileW(hDrop, i, sb, (uint)sb.Capacity) == 0) continue;
+                paths.Add(sb.ToString());
+            }
+        }
+        finally { DragFinish(hDrop); }
+        return paths;
+    }
+
+    /// <summary>拖进来的文件按普通「打开」处理；目录则切给左侧文件树</summary>
+    private void OpenDroppedPaths(List<string> paths)
+    {
+        int opened = 0;
+        foreach (var path in paths)
+        {
+            if (File.Exists(path))
+            {
+                OpenFile(path);   // OpenFile 自己会刷新文件树与最近文件
+                opened++;
+            }
+            else if (Directory.Exists(path))
+            {
+                FileTreePanel.Visibility = Visibility.Visible;
+                SetFileTreeRoot(path);
+            }
+        }
+        if (opened > 0) StatusBarMessage($"已拖入打开 {opened} 个文件");
+    }
 
     private long _lastRaiseTick;
     private readonly HashSet<Window> _raiseHookedWindows = new();
@@ -713,6 +797,7 @@ public partial class MainWindow : Window
         editor.BookmarkToggled += (_, _) => UpdateBookmarkBar(editor);
         editor.ShortcutPressed += (_, cmd) => HandleShortcut(cmd);
         editor.ReadOnlyEditAttempted += OnReadOnlyEditAttempted;
+        editor.FilesDropped += paths => OpenDroppedPaths(paths.ToList());
 
         _documentItems[doc] = item;
         _itemEditors[item] = editor;
@@ -2581,34 +2666,35 @@ public partial class MainWindow : Window
         StatusBarMessage("文档是只读的（Ctrl+Alt+R 可取消只读）");
     }
 
-    private static readonly (string Display, string Lexer)[] Languages =
+    // 括号里第三个值是给词法器注入关键字用的「样例扩展名」：Lexilla 没有独立的 JS/Go/TOML 词法器，
+    // 这些语言借用近似词法器（cpp/props），关键字表必须按语言注入，否则关键字不上色
+    private static readonly (string Display, string Lexer, string? KeywordHint)[] Languages =
     {
-        ("C / C++", "cpp"), ("C#", "cpp"), ("Java", "cpp"),
-        ("Python", "python"), ("HTML", "hypertext"), ("XML", "xml"),
-        ("CSS", "css"), ("JavaScript", "javascript"), ("TypeScript", "cpp"),
-        ("JSON", "json"), ("SQL", "sql"), ("Markdown", "markdown"),
-        ("YAML", "yaml"), ("TOML", "toml"), ("Bash", "bash"),
-        ("Batch", "batch"), ("PowerShell", "powershell"), ("Perl", "perl"),
-        ("Lua", "lua"), ("Ruby", "ruby"), ("Go", "go"), ("Rust", "rust"),
-        ("Swift", "cpp"), ("Kotlin", "cpp"), ("Verilog", "verilog"),
-        ("VHDL", "vhdl"), ("Assembly", "asm"), ("Fortran", "fortran"),
-        ("Pascal", "pascal"), ("Properties", "props"), ("Diff", "diff"),
-        ("纯文本", "null"),
+        ("C / C++", "cpp", ".cpp"), ("C#", "cpp", ".cs"), ("Java", "cpp", ".java"),
+        ("Python", "python", ".py"), ("HTML", "hypertext", ".html"), ("XML", "xml", ".xml"),
+        ("CSS", "css", ".css"), ("JavaScript", "cpp", ".js"), ("TypeScript", "cpp", ".ts"),
+        ("JSON", "json", ".json"), ("SQL", "sql", ".sql"), ("Markdown", "markdown", ".md"),
+        ("YAML", "yaml", ".yaml"), ("TOML", "props", ".toml"), ("Bash", "bash", ".sh"),
+        ("Batch", "batch", ".bat"), ("PowerShell", "powershell", ".ps1"), ("Perl", "perl", ".pl"),
+        ("Lua", "lua", ".lua"), ("Ruby", "ruby", ".rb"), ("Go", "cpp", ".go"), ("Rust", "rust", ".rs"),
+        ("Swift", "cpp", ".swift"), ("Kotlin", "cpp", ".kt"), ("Verilog", "verilog", ".v"),
+        ("VHDL", "vhdl", ".vhd"), ("Assembly", "asm", ".asm"), ("Fortran", "fortran", ".f"),
+        ("Pascal", "pascal", ".pas"), ("Properties", "props", ".ini"), ("Diff", "diff", ".diff"),
+        ("纯文本", "null", null),
     };
 
     private void BuildLanguageMenu()
     {
         LanguageMenu.Items.Clear();
-        foreach (var (display, lexer) in Languages)
+        foreach (var (display, lexer, hint) in Languages)
         {
             var item = new MenuItem { Header = display };
             item.Click += (_, _) =>
             {
                 var editor = GetCurrentEditor();
                 if (editor == null) return;
-                editor.SetLexerByName(lexer);
-                editor.ApplyTheme();
-                StatusLang.Text = $"语法: {(lexer == "null" ? "text" : lexer)}";
+                editor.SetLexerByName(lexer, hint);
+                StatusLang.Text = $"语法: {(lexer == "null" ? "text" : display.ToLowerInvariant())}";
             };
             LanguageMenu.Items.Add(item);
         }

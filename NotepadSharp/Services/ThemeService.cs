@@ -175,6 +175,7 @@ public static class ThemeService
             case "batch":
             case "powershell": ApplyBatchColors(sci); break;
             case "props": ApplyPropsColors(sci); break;
+            case "r": ApplyRColors(sci); break;
             case "diff": ApplyDiffColors(sci); break;
             default: ApplyGenericColors(sci); break;
         }
@@ -374,6 +375,21 @@ public static class ThemeService
         SetStyle(sci, 2, KeywordC, bold: true);    // 词
         SetStyle(sci, 5, FuncC);                   // 命令
         SetStyle(sci, 8, StringC);                 // 字符串
+    }
+
+    // SCE_R_*
+    private static void ApplyRColors(ScintillaNET.Scintilla sci)
+    {
+        SetStyle(sci, 1, Comment);                 // 注释
+        SetStyle(sci, 2, KeywordC, bold: true);    // 关键字
+        SetStyle(sci, 3, KeywordC);                // 基础关键字
+        SetStyle(sci, 4, TypeC);                   // 其它关键字
+        SetStyle(sci, 5, NumberC);                 // 数字
+        SetStyle(sci, 6, StringC);                 // 字符串
+        SetStyle(sci, 7, StringC);                 // 字符串2
+        SetStyle(sci, 8, OperatorC);               // 操作符
+        SetStyle(sci, 10, FuncC);                  // 中缀运算符 %in% 等
+        SetStyle(sci, 11, ErrorC);                 // 未闭合中缀
     }
 
     // SCE_PROPS_*

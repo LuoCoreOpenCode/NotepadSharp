@@ -44,16 +44,23 @@ public partial class EditorControl : WindowsFormsHost
             Font = new System.Drawing.Font("Consolas", 10),
         };
 
+        // Scintilla 的句柄创建后才真正能接收样式/词法器设置，否则在控件加入可视树之前调用会被丢弃。
+        // 订阅必须早于 SetupEditor：里面的样式调用可能就地触发句柄创建，晚了这个事件就再也收不到。
+        _scintilla.HandleCreated += OnScintillaHandleCreated;
+
         SetupEditor();
         Child = _scintilla;
 
-        // Scintilla 的句柄创建后才真正能接收样式/词法器设置，
-        // 否则在控件加入可视树之前调用会被丢弃
-        _scintilla.HandleCreated += (_, _) =>
-        {
-            ApplyLexer();
-            ApplyTheme();
-        };
+        // 句柄也可能在构造/对象初始化阶段就被样式类属性就地创建（那时事件还没订阅上），
+        // 这里补一次同样的初始化，避免词法器、主题、拖放接收器统统漏掉
+        if (_scintilla.IsHandleCreated) OnScintillaHandleCreated(_scintilla, EventArgs.Empty);
+    }
+
+    private void OnScintillaHandleCreated(object? sender, EventArgs e)
+    {
+        ApplyLexer();
+        ApplyTheme();
+        AttachFileDropSink();
     }
 
     private void SetupEditor()
@@ -140,6 +147,20 @@ public partial class EditorControl : WindowsFormsHost
 
     /// <summary>编辑器内按下的快捷键（命令名），由主窗口处理</summary>
     public event EventHandler<string>? ShortcutPressed;
+
+    // 外部文件拖放接收器：挂在 Scintilla 子窗口上，句柄重建（浮动/停靠）后要重挂
+    private FileDropSink? _dropSink;
+
+    /// <summary>外部文件被拖到本编辑器上并松手（主窗口据此打开文件）</summary>
+    public event Action<string[]>? FilesDropped;
+
+    private void AttachFileDropSink()
+    {
+        if (!_scintilla.IsHandleCreated) return;
+        _dropSink?.Release();          // 句柄重建时会再次进来，先把旧接收器摘掉
+        _dropSink = new FileDropSink(_scintilla);
+        _dropSink.FilesDropped += paths => FilesDropped?.Invoke(paths);
+    }
 
     private void OnScintillaKeyDown(object? sender, System.Windows.Forms.KeyEventArgs e)
     {
@@ -312,39 +333,10 @@ public partial class EditorControl : WindowsFormsHost
         ApplyLexer();
     }
 
+    private string? _pendingFilePath;
+
     /// <summary>当前词法器名称（自行记录，不依赖 Scintilla 的读回）</summary>
     public string CurrentLexerName { get; private set; } = "null";
-
-    // Lexilla 名称 → Legacy Lexer 枚举
-    private static readonly System.Collections.Generic.Dictionary<string, ScintillaNET.Lexer> EnumLexers =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["cpp"] = ScintillaNET.Lexer.Cpp,
-            ["python"] = ScintillaNET.Lexer.Python,
-            ["hypertext"] = ScintillaNET.Lexer.Html,
-            ["html"] = ScintillaNET.Lexer.Html,
-            ["xml"] = ScintillaNET.Lexer.Xml,
-            ["css"] = ScintillaNET.Lexer.Css,
-            ["json"] = ScintillaNET.Lexer.Json,
-            ["sql"] = ScintillaNET.Lexer.Sql,
-            ["markdown"] = ScintillaNET.Lexer.Markdown,
-            ["batch"] = ScintillaNET.Lexer.Batch,
-            ["props"] = ScintillaNET.Lexer.Properties,
-            ["properties"] = ScintillaNET.Lexer.Properties,
-            ["powershell"] = ScintillaNET.Lexer.PowerShell,
-            ["lua"] = ScintillaNET.Lexer.Lua,
-            ["perl"] = ScintillaNET.Lexer.Perl,
-            ["ruby"] = ScintillaNET.Lexer.Ruby,
-            ["pascal"] = ScintillaNET.Lexer.Pascal,
-            ["matlab"] = ScintillaNET.Lexer.Matlab,
-            ["asm"] = ScintillaNET.Lexer.Asm,
-            ["fortran"] = ScintillaNET.Lexer.Fortran,
-            ["lisp"] = ScintillaNET.Lexer.Lisp,
-            ["verilog"] = ScintillaNET.Lexer.Verilog,
-            ["r"] = ScintillaNET.Lexer.R,
-        };
-
-    private string? _pendingFilePath;
 
     /// <summary>按当前主题给编辑器上色</summary>
     public void ApplyTheme()
@@ -358,48 +350,40 @@ public partial class EditorControl : WindowsFormsHost
 
         SetLexerByNameInternal(LexerService.GetLexerName(_pendingFilePath), _pendingFilePath);
         ApplyTheme();
+        RestyleNow();
     }
 
-    public void SetLexerByName(string lexerName)
+    public void SetLexerByName(string lexerName, string? keywordPath = null)
     {
-        SetLexerByNameInternal(lexerName, null);
+        SetLexerByNameInternal(lexerName, keywordPath);
         ApplyTheme();
+        RestyleNow();
     }
 
-    private void SetLexerByNameInternal(string lexerName, string? filePath)
+    /// <summary>词法器换好后强制整篇重新着色，避免「先填文本后设词法器」时留着旧样式</summary>
+    private void RestyleNow()
+    {
+        if (_scintilla.TextLength > 0) _scintilla.Colorize(0, _scintilla.TextLength);
+    }
+
+    private void SetLexerByNameInternal(string lexerName, string? keywordPath)
     {
         if (string.IsNullOrEmpty(lexerName)) lexerName = "null";
 
-        // 触发 Lexilla 原生库初始化
-        try { ScintillaNET.Lexilla.GetLexerNames(); }
-        catch { /* 原生库缺失时退回内置 lexer */ }
-
-        // 优先用 Lexer 枚举属性（旧版标识，最可靠）
-        string applied = lexerName;
-        bool ok = false;
-        if (EnumLexers.TryGetValue(lexerName, out var lx))
+        // 下发的名字若不在 Lexilla 目录里，Scintilla 只会「静默不装词法器」——
+        // 文本照常显示但整篇没有颜色。所以装完必须读回校验，失败就老实退回纯文本。
+        bool installed = TryInstallLexer(lexerName);
+        if (!installed && !string.Equals(lexerName, "null", StringComparison.OrdinalIgnoreCase))
         {
-            try { _scintilla.Lexer = lx; ok = true; }
-            catch { ok = false; }
+            lexerName = "null";
+            installed = TryInstallLexer(lexerName);
         }
+        CurrentLexerName = installed ? lexerName : "null";
 
-        if (!ok)
+        // 注入关键字表（cpp 这类词法器不带 C#/JS/Go 等语言的关键字，不注入则关键字不上色）
+        if (keywordPath != null)
         {
-            // 回退：字符串属性
-            try { _scintilla.LexerLanguage = lexerName; ok = true; } catch { }
-            if (!ok)
-            {
-                try { _scintilla.LexerLanguage = lexerName.ToLowerInvariant(); applied = lexerName.ToLowerInvariant(); }
-                catch { }
-            }
-            if (!ok) applied = "null";
-        }
-        CurrentLexerName = applied;
-
-        // 注入关键字表（cpp / python 等 lexer 本身不带这些语言的关键字）
-        if (filePath != null)
-        {
-            var kw = LexerService.GetKeywords(filePath);
+            var kw = LexerService.GetKeywords(keywordPath);
             if (kw != null)
             {
                 _scintilla.SetKeywords(0, kw.Primary);
@@ -413,6 +397,24 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.SetProperty("fold.compact", "1");
         _scintilla.SetProperty("fold.html", "1");
         _scintilla.SetProperty("fold.hypertext.comment", "1");
+    }
+
+    /// <summary>下发词法器并读回校验：以控件里真正生效的那个为准</summary>
+    private bool TryInstallLexer(string lexerName)
+    {
+        try { _scintilla.LexerName = lexerName; }
+        catch
+        {
+            // 部分版本/名字大小写差异下换用旧字符串属性
+            try { _scintilla.LexerLanguage = lexerName; } catch { return false; }
+        }
+
+        try
+        {
+            string readback = _scintilla.LexerLanguage ?? string.Empty;
+            return string.Equals(readback, lexerName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     // ==================== 光标位置 ====================

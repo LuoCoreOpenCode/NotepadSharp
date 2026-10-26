@@ -12,6 +12,10 @@
 
 #define MyAppName "NotepadSharp"
 #define MyAppExeName "NotepadSharp.exe"
+; 全项目统一图标来源：NotepadSharp\Resources\Icons\NotepadSharp.ico
+; （csproj 的 ApplicationIcon 已经把同一份图标嵌进 exe，所以快捷方式、右键菜单、
+;   文件关联的 DefaultIcon 一律指向 exe 即可，无需再单独安装图标文件）
+#define MyAppIcon "..\NotepadSharp\Resources\Icons\NotepadSharp.ico"
 
 [Setup]
 ; AppId 一旦发布就不能改，卸载程序靠它认得自己
@@ -23,6 +27,8 @@ AppPublisher=Luo
 DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
+; 安装向导/卸载入口也使用同一个图标
+SetupIconFile={#MyAppIcon}
 OutputDir={#OutputDir}
 OutputBaseFilename={#MyAppName}-{#MyAppVersion}-setup
 Compression=lzma2/max
@@ -74,6 +80,8 @@ Root: HKA; Subkey: "Software\Classes\*\shell\{#MyAppName}\command"; ValueType: s
 
 ; ProgID + 各扩展名的 OpenWithProgids，只把自己登记成候选，不抢默认程序。
 ; 扩展名那一行必须用 uninsdeletevalue：整键删掉会连别的软件的关联一起毁掉
+; 关联图标统一走 exe 内嵌图标（来源 NotepadSharp\Resources\Icons\NotepadSharp.ico），
+; 以后新增任何扩展名关联都照这个写法，不要再引用别的图标文件
 Root: HKA; Subkey: "Software\Classes\{#MyAppName}.Text"; ValueType: string; \
   ValueName: ""; ValueData: "{#MyAppName} 文本文件"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\{#MyAppName}.Text\DefaultIcon"; ValueType: string; \
