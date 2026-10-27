@@ -5,7 +5,7 @@ namespace NotepadSharp.Services;
 
 /// <summary>
 /// 十六进制视图：把字节流渲染成「地址 | 十六进制 | ASCII」三栏文本。
-/// 对应 ndd 的「文件-打开-二进制文件」（Open_In_Bin）。
+/// 对应「文件-打开-二进制文件」入口。
 /// </summary>
 public static class HexDump
 {

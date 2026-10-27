@@ -15,8 +15,8 @@ using MessageBox = System.Windows.MessageBox;
 namespace NotepadSharp.Views;
 
 /// <summary>
-/// 哈希计算窗口（对齐 ndd 的 Md5hash 对话框：取剪贴板/选中/文件，算多种摘要）。
-/// ndd 的 MD4 与 Keccak-256 在 .NET 内置实现里没有，这里提供 SHA-1/256/384/512 与 SHA3-256（平台支持时）。
+/// 哈希计算窗口：取剪贴板/选中/文件，算多种摘要。
+/// .NET 内置的摘要算法有限，这里提供 SHA-1/256/384/512 与 SHA3-256（平台支持时）。
 /// </summary>
 public sealed class HashWindow : Window
 {

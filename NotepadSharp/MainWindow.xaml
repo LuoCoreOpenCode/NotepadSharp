@@ -435,7 +435,7 @@
                 </Button>
             </StackPanel>
 
-            <!-- 工具栏右端：固定整个程序置顶 + 关闭当前标签（对齐 ndd 的标签栏右上角按钮）-->
+            <!-- 工具栏右端：固定整个程序置顶 + 关闭当前标签 -->
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,3,10,3">
                 <ToggleButton x:Name="TopmostPin" Style="{DynamicResource ToolPinButton}"
                               IsChecked="{Binding Topmost, Mode=TwoWay}"

@@ -9,7 +9,7 @@ using Orientation = System.Windows.Controls.Orientation;
 namespace NotepadSharp.Views;
 
 /// <summary>
-/// 批量查找输入框（对齐 ndd 的 Batch Find）：一行一个关键词，结果交给「查找结果」面板。
+/// 批量查找输入框：一行一个关键词，结果交给「查找结果」面板。
 /// </summary>
 public sealed class BatchFindWindow : Window
 {

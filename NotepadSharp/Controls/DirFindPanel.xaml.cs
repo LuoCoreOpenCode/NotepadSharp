@@ -10,7 +10,7 @@ using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 namespace NotepadSharp.Controls;
 
 /// <summary>
-/// 目录查找/替换面板（对应 ndd 的「目录查找」）：在宿主窗体底部展开，
+/// 目录查找/替换面板：在宿主窗体底部展开，
 /// 结果按文件分组，双击命中行跳转；替换直接按原编码写回磁盘。
 /// </summary>
 public partial class DirFindPanel : UserControl

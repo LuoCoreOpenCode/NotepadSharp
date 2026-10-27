@@ -17,7 +17,7 @@ using WpfAlignment = System.Windows.HorizontalAlignment;
 namespace NotepadSharp.Views;
 
 /// <summary>
-/// 列编辑器对话框（对齐 ndd 的 columnedit：插入文本 / 复制首行 / 粘贴剪贴板 / 递增编号）。
+/// 列编辑器对话框（插入文本 / 复制首行 / 粘贴剪贴板 / 递增编号）。
 /// </summary>
 public sealed class ColumnEditorWindow : Window
 {

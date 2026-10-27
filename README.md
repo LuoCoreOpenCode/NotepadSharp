@@ -1,6 +1,6 @@
 # NotepadSharp
 
-基于 **WPF + Scintilla.NET** 的轻量级 Windows 文本编辑器，功能对标 [Notepad--](https://gitee.com/cxasm/notepad--)，
+基于 **WPF + Scintilla.NET** 的轻量级 Windows 文本编辑器，
 窗口停靠直接复用 Visual Studio 的停靠内核，拖标签拆窗格、浮窗停靠的手感和 VS 一致。
 
 ## 环境

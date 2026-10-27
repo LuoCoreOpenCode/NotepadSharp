@@ -18,7 +18,7 @@ namespace NotepadSharp.Views;
 
 /// <summary>
 /// 目录对比窗口：递归比对两个目录里的同名文件（大小 + 内容），列出仅左侧 / 仅右侧 / 内容不同。
-/// 对齐 ndd RealCompare 的目录模式；双击两边都有的文件直接进左右对比。
+/// 目录模式下双击两边都有的文件，直接进左右对比。
 /// </summary>
 public sealed class DirCompareWindow : Window
 {

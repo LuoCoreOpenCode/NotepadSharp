@@ -21,7 +21,7 @@ public class AppSettings
     public bool AutoEolDetect { get; set; } = true;
     public bool ShowToolBar { get; set; } = true;
 
-    /// <summary>超过该大小（MB）的文件在打开前提示（ndd 的 nBigFileSign 语义）</summary>
+    /// <summary>超过该大小（MB）的文件在打开前提示</summary>
     public int BigFileThresholdMb { get; set; } = 100;
 
     public bool WatchExternalChanges { get; set; } = true;

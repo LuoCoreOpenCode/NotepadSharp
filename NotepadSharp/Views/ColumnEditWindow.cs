@@ -15,7 +15,7 @@ using TextBox = System.Windows.Controls.TextBox;
 namespace NotepadSharp.Views;
 
 /// <summary>
-/// ndd「列与宏 → 列编辑」：给选中的每一行在指定列插入前缀 + 文本 + 递增序号。
+/// 「列与宏 → 列编辑」：给选中的每一行在指定列插入前缀 + 文本 + 递增序号。
 /// 位置可选行首、选区左边界、光标列，适合批量给多行加注释/编号/列前缀。
 /// </summary>
 public sealed class ColumnEditWindow : Window

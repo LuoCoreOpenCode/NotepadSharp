@@ -17,7 +17,7 @@ public sealed class DirFileResult
     public string DirectoryName => Path.GetDirectoryName(FilePath) ?? string.Empty;
 }
 
-/// <summary>目录查找/替换的输入条件（ndd「目录查找」面板的字段集合）</summary>
+/// <summary>目录查找/替换的输入条件</summary>
 public sealed class DirSearchOptions
 {
     public string RootPath { get; set; } = string.Empty;
@@ -306,7 +306,7 @@ public static class DirectorySearchService
         return relative.Any(part => skips.Contains(part));
     }
 
-    /// <summary>ndd 用 ':' / ';' / ',' 分隔多个模式，如 *.c:*.cpp:*.h</summary>
+    /// <summary>支持用 ':' / ';' / ',' 分隔多个模式，如 *.c:*.cpp:*.h</summary>
     public static List<string> ParseFilter(string filter)
         => filter.Split(':', ';', ',')
                  .Select(p => p.Trim())

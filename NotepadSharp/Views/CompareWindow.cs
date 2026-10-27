@@ -14,8 +14,8 @@ using WpfAlignment = System.Windows.HorizontalAlignment;
 namespace NotepadSharp.Views;
 
 /// <summary>
-/// 文件对比窗口：左右两个只读编辑器按行对齐显示差异（ndd 的 RealCompare 是商业插件，
-/// 这里用行级 LCS 自行实现），差异行整行着色，支持上一个/下一个差异跳转。
+/// 文件对比窗口：左右两个只读编辑器按行对齐显示差异（行级 LCS 自行实现），
+/// 差异行整行着色，支持上一个/下一个差异跳转。
 /// </summary>
 public sealed class CompareWindow : Window
 {

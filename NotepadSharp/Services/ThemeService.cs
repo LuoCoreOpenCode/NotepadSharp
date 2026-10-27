@@ -61,7 +61,7 @@ public static class ThemeService
     private static DrawingColor D(byte r, byte g, byte b) => DrawingColor.FromArgb(255, r, g, b);
 
     // ===== 调色板 =====
-    // 亮色对齐 ndd / QScintilla 默认色（qscilexercpp.cpp），暗色对齐 ndd 的 Monokai 主题
+    // 亮色对齐 QScintilla 默认色，暗色对齐 Monokai 主题
 
     private static DrawingColor Comment => IsDark ? D(0x75, 0x71, 0x5E) : D(0x00, 0x7F, 0x00);      // 注释：绿
     private static DrawingColor CommentDocC => IsDark ? D(0x75, 0x71, 0x5E) : D(0x3F, 0x70, 0x3F);   // 文档注释

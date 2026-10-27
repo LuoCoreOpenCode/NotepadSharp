@@ -9,13 +9,13 @@ using ScintillaNET;
 namespace NotepadSharp.Controls;
 
 /// <summary>
-/// 编辑器行 / 列批量操作，复刻 ndd「格式」菜单。
-/// 语义对齐 ndd 的 sortLines(fromLine, toLine, sorter)：有跨行选区时只处理选区内的行，
+/// 编辑器行 / 列批量操作，对应「格式」菜单。
+/// 语义：有跨行选区时只处理选区内的行，
 /// 否则处理整个文档；批量改动都包在一个 undo action 内，可一次撤销。
 /// </summary>
 public partial class EditorControl
 {
-    // ==================== 标记索引（对齐 ndd 的 16/18/20/24） ====================
+    // ==================== 标记索引 ====================
 
     public const int WriteMarkerIndex = 16;
     public const int ModifyMarkerIndex = 18;
@@ -247,7 +247,7 @@ public partial class EditorControl
             return l.Where(seen.Add).ToList();
         });
 
-    /// <summary>去重并排序（ndd「删除重复行」的另一变体）</summary>
+    /// <summary>去重并排序（「删除重复行」的另一变体）</summary>
     public void RemoveDuplicateLinesSorted()
         => TransformLines(l =>
         {
@@ -260,7 +260,7 @@ public partial class EditorControl
     public void RemoveEmptyLines()
         => TransformLines(l => l.Where(x => x.Trim().Length != 0).ToList());
 
-    /// <summary>连续空行折叠成一行（ndd Remove_Empty_Lines_Cbc）</summary>
+    /// <summary>连续空行折叠成一行</summary>
     public void RemoveConsecutiveEmptyLines()
         => TransformLines(l =>
         {
@@ -276,7 +276,7 @@ public partial class EditorControl
             return result;
         });
 
-    /// <summary>删除文档首尾的空行（ndd Remove_Head_End_Blank）</summary>
+    /// <summary>删除文档首尾的空行</summary>
     public void RemoveHeadEndEmptyLines()
         => TransformLines(l =>
         {
@@ -403,7 +403,7 @@ public partial class EditorControl
         SafeCopy();
     }
 
-    /// <summary>合并选区内的行（ndd Join_Lines）</summary>
+    /// <summary>合并选区内的行</summary>
     public void JoinLines()
     {
         var (first, last) = WorkLineRange();
@@ -420,7 +420,7 @@ public partial class EditorControl
         GoToLine(first);
     }
 
-    /// <summary>把选区中的转义 \n 变成真正换行（ndd Split_Lines）</summary>
+    /// <summary>把选区中的转义 \n 变成真正换行</summary>
     public void SplitLines()
     {
         string sel = SelectedText;
@@ -436,7 +436,7 @@ public partial class EditorControl
 
     public enum CaseMode { Upper, Lower, Proper, ProperBlend, Sentence, SentenceBlend, Invert, Random }
 
-    /// <summary>作用于选区；无选区时作用于光标所在单词（与 ndd 一致）</summary>
+    /// <summary>作用于选区；无选区时作用于光标所在单词</summary>
     public void ChangeCase(CaseMode mode)
     {
         int start = _scintilla.SelectionStart;
@@ -597,7 +597,7 @@ public partial class EditorControl
     /// <summary>
     /// 列编辑器：在选区的同一列上批量插入文本或编号。
     /// mode: 0=插入文本 1=复制首行 2=粘贴剪贴板 4=递增编号
-    /// repeat: 每个编号重复的行数（ndd 的「重复次数」，&lt;1 视作 1）
+    /// repeat: 每个编号重复的行数（&lt;1 视作 1）
     /// </summary>
     public void ColumnEditor(int mode, string text, int initial, int increment, int repeat, int numberDigits,
                              ColumnNumberFormat format, bool leadingZero, string prefix)
@@ -718,7 +718,7 @@ public partial class EditorControl
 
     // ==================== 查找结果标记 ====================
 
-    /// <summary>按关键词给整篇文档的行打书签（ndd「标记全部」），不区分大小写</summary>
+    /// <summary>按关键词给整篇文档的行打书签（「标记全部」），不区分大小写</summary>
     public int MarkLinesContaining(string keyword)
     {
         if (string.IsNullOrEmpty(keyword)) return 0;
@@ -802,7 +802,7 @@ public partial class EditorControl
 
     // ==================== 单词自动补全 ====================
 
-    /// <summary>用文档中已有的单词 + 语言关键字做补全候选（ndd 的自动完成）</summary>
+    /// <summary>用文档中已有的单词 + 语言关键字做补全候选</summary>
     public void AutoCompleteFromDocument()
     {
         var words = new HashSet<string>(StringComparer.Ordinal);
@@ -822,7 +822,7 @@ public partial class EditorControl
 
     // ==================== 对齐 / 补位 ====================
 
-    /// <summary>把行尾补空格对齐到同一列（ndd 的文本右补位）</summary>
+    /// <summary>把行尾补空格对齐到同一列</summary>
     public void PadLinesToEqualWidth()
     {
         var (first, last) = WorkLineRange();

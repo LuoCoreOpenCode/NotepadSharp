@@ -153,7 +153,7 @@ public static class EncodingService
         int utf8Errors = CountStrictDecodeErrors(bytes, CpUtf8);
         if (utf8Errors == 0)
         {
-            // 纯 ASCII 也按 UTF-8 无 BOM 处理，与 ndd 默认一致
+            // 纯 ASCII 也按 UTF-8 无 BOM 处理
             return (CpUtf8, false);
         }
 
@@ -332,7 +332,7 @@ public static class EncodingService
 
     private static int BomLength(int codePage) => GetPreamble(codePage).Length;
 
-    /// <summary>状态栏/对话框显示名，对齐 ndd 的措辞</summary>
+    /// <summary>状态栏/对话框显示名</summary>
     public static string GetDisplayName(int codePage, bool bom)
     {
         string name = codePage switch

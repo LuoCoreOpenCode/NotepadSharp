@@ -664,7 +664,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 打开文件。reloadEncoding 非空表示「以指定编码重新载入」（ndd 的编码-重新载入语义）。
+    /// 打开文件。reloadEncoding 非空表示「以指定编码重新载入」。
     /// </summary>
     private void OpenFile(string filePath, (int CodePage, bool Bom)? reloadEncoding)
     {
@@ -1110,7 +1110,7 @@ public partial class MainWindow : Window
         editor.ToggleComment(prefix);
     }
 
-    // ==================== 格式菜单（对齐 ndd 的行/列/大小写操作） ====================
+    // ==================== 格式菜单（行/列/大小写批量操作） ====================
 
     /// <summary>格式类操作的前提：有编辑器、非只读、非十六进制视图</summary>
     private EditorControl? FormatEditor()
@@ -1137,7 +1137,7 @@ public partial class MainWindow : Window
     private void RemoveDuplicateLines() => FormatEditor()?.RemoveDuplicateLines();
     private void RemoveDuplicateLinesSorted() => FormatEditor()?.RemoveDuplicateLinesSorted();
 
-    /// <summary>keepOne=true 时把连续空行压成一行（ndd 的 Cbc 变体），否则全删</summary>
+    /// <summary>keepOne=true 时把连续空行压成一行，否则全删</summary>
     private void RemoveEmptyLines(bool keepOne)
     {
         var editor = FormatEditor();
@@ -1628,7 +1628,7 @@ public partial class MainWindow : Window
 
     private void OnCompareFiles(object sender, RoutedEventArgs e) => ShowCompare();
 
-    /// <summary>ndd 的「与磁盘版本对比」：左侧是编辑区（可能含未保存改动），右侧是文件现状</summary>
+    /// <summary>「与磁盘版本对比」：左侧是编辑区（可能含未保存改动），右侧是文件现状</summary>
     private void CompareWithDisk()
     {
         var doc = _currentDocument;
@@ -2186,7 +2186,7 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>锁定当前标签：防误关，也锁住编码切换（对齐 ndd 的标签固定语义）</summary>
+    /// <summary>锁定当前标签：防误关，也锁住编码切换</summary>
     private void ToggleTabLock()
     {
         var doc = _currentDocument;
@@ -2574,7 +2574,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        // ndd 语义：转换只改「保存时用哪种编码」，屏幕内容不动，因此文档变为待保存状态
+        // 转换编码只改「保存时用哪种编码」，屏幕内容不动，因此文档变为待保存状态
         doc.CodePage = option.CodePage;
         doc.HasBom = option.Bom;
         doc.IsDirty = true;
@@ -3435,8 +3435,7 @@ public partial class MainWindow : Window
             "• 亮色/暗色主题\n" +
             "• 文件树浏览\n" +
             "• 编码自动识别（UTF-8 / GBK / UTF-16）\n\n" +
-            "参考项目：Notepad-- (ndd)\n" +
-            "https://gitee.com/cxasm/notepad--",
+            "开源仓库：https://github.com/LuoCoreOpenCode/NotepadSharp",
             "关于 NotepadSharp", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
