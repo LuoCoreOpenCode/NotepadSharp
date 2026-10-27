@@ -28,7 +28,8 @@ Write-Host "版本 $Version" -ForegroundColor Cyan
 
 if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
 
-dotnet publish $proj -c Release -r win-x64 --self-contained false -o $publishDir --nologo -v q
+# 自包含发布：运行时一并打进产物，用户机器没装 .NET 也能跑；代价是产物体积大很多
+dotnet publish $proj -c Release -r win-x64 --self-contained true -o $publishDir --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败（退出码 $LASTEXITCODE）" }
 
 # 停靠内核必须跟着走，少了它程序在别的机器上直接起不来

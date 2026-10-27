@@ -7,7 +7,7 @@
 
 | | |
 | --- | --- |
-| 运行 | Windows x64 + .NET 10 **桌面**运行时 |
+| 运行 | Windows x64（安装包自带 .NET 运行时，**无需预装任何框架**） |
 | 开发 | .NET 10 SDK（`dotnet build` 即可，不需要本机安装 Visual Studio） |
 
 停靠内核 `Microsoft.VisualStudio.Shell.ViewManager.dll` 及其 11 个依赖已内联在 `NotepadSharp/VsDlls/`，
@@ -50,7 +50,8 @@ https://github.com/<owner>/<repo>/releases/latest/download/NotepadSharp-<版本>
 
 `releases/latest` 永远指向最新一版，所以地址写死即可，不用查 API、也不用把下载地址编进程序。
 程序按清单里的 `sha256` 校验安装包，再拉起 Inno Setup 静默安装并重启。
-下载进度写在状态栏；这台机器实测 GitHub CDN 只有几十 KB/s，8 MB 的安装包要下几分钟，所以清单请求 20 秒超时、安装包下载 20 分钟超时。
+安装包是自包含的，体积有几十 MB；GitHub CDN 在国内实测只有几十 KB/s，
+所以清单请求 20 秒超时、安装包下载给到 90 分钟。
 
 - 代码位置：`NotepadSharp/Services/UpdateService.cs`（换仓库改 `GithubOwner` / `GithubRepo`）
 - 调试时可用环境变量 `NOTEPADSHARP_UPDATE_MANIFEST` 指向别的清单地址

@@ -109,56 +109,10 @@ Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Flags: nowait; Check: In
 ; 配置目录属于越权，而且换机器时配置本来也带不走
 
 [Code]
-// .NET 10 桌面运行时是框架依赖包的唯一外部前提，缺了程序起不来，装之前就提示清楚。
-// dotnet 的安装信息写在 32 位视图（WOW6432Node）里，所以两个视图都要看。
-function RuntimeMajorInView(Root: Integer; Path: string; MinorRequired: Integer): Boolean;
-var
-  Names: TArrayOfString;
-  I: Integer;
-  Major: Integer;
-  Dot: Integer;
-begin
-  Result := False;
-  if not RegGetValueNames(Root, Path, Names) then Exit;
-  for I := 0 to GetArrayLength(Names) - 1 do
-  begin
-    // 键值形如 "10.0.2"，也有区间写法 "8.0.0-8.0.5"，取首段主版本即可
-    Dot := Pos('.', Names[I]);
-    if Dot <= 1 then Continue;
-    Major := StrToIntDef(Copy(Names[I], 1, Dot - 1), 0);
-    if Major >= MinorRequired then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-end;
-
-function DesktopRuntimePresent(MinorRequired: Integer): Boolean;
-begin
-  Result := RuntimeMajorInView(HKLM32,
-      'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App', MinorRequired) or
-    RuntimeMajorInView(HKLM64,
-      'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App', MinorRequired);
-end;
+// 自包含发布已经把 .NET 运行时打进安装包，用户机器不需要预装任何框架，
+// 也就不再需要装前检查运行时的逻辑了。
 
 function InstallWasSilent: Boolean;
 begin
   Result := WizardSilent;
-end;
-
-procedure InitializeSetupWarning(const Msg: string);
-begin
-  // 静默安装（自动更新走的就是这条路）里弹框会把安装程序永久挂住，只记日志
-  Log(Msg);
-  if not WizardSilent then MsgBox(Msg, mbInformation, MB_OK);
-end;
-
-function InitializeSetup: Boolean;
-begin
-  Result := True;
-  if DesktopRuntimePresent(10) then Exit;
-  InitializeSetupWarning('NotepadSharp 需要 .NET 10 桌面运行时（Microsoft Windows Desktop Runtime 10.x）。' + #13#10#13#10 +
-    '安装程序会继续，但程序可能无法启动。' + #13#10 +
-    '下载地址：https://dotnet.microsoft.com/download/dotnet/10.0');
 end;

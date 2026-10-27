@@ -30,8 +30,8 @@ public static class UpdateService
     /// <summary>清单是个小 json，20 秒拿不到就当网络不通，别让用户干等</summary>
     private static readonly TimeSpan ManifestTimeout = TimeSpan.FromSeconds(20);
 
-    /// <summary>安装包 8 MB，GitHub CDN 在国内实测只有 20~40 KB/s，一次下载能拖到 5 分钟以上</summary>
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(20) };
+    /// <summary>自包含安装包有几十 MB，GitHub CDN 在国内实测只有 20~40 KB/s，给足 90 分钟</summary>
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(90) };
 
     private static int _checkRunning;
 
