@@ -200,6 +200,9 @@ public static class UpdateService
         const int reportEveryPercent = 5;
         var lastReported = -reportEveryPercent;
         long done = 0;
+        // 全程平均速度比瞬时速度稳，算出来的剩余时间不会来回跳
+        var watch = Stopwatch.StartNew();
+        var lastReport = TimeSpan.Zero;
 
         await using (var http = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
         await using (var file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -214,10 +217,16 @@ public static class UpdateService
                 if (total > 0)
                 {
                     var percent = (int)(done * 100 / total);
-                    if (percent - lastReported >= reportEveryPercent || percent == 100)
+                    // 自包含包 5% 就是好几 MB，慢网络下只按百分比节流的话进度条会很久不动，
+                    // 所以再加一层时间节流：最多隔 2 秒就刷一次，让剩余时间一直有反馈
+                    if (percent - lastReported >= reportEveryPercent || percent == 100
+                        || watch.Elapsed - lastReport >= TimeSpan.FromSeconds(2))
                     {
                         lastReported = percent;
-                        progress?.Invoke($"正在下载 {manifest.Version} 安装包 … {percent}%（{HumanSize(done)} / {HumanSize(total)}）");
+                        lastReport = watch.Elapsed;
+                        progress?.Invoke(
+                            $"正在下载 {manifest.Version} 安装包 … {percent}%（{HumanSize(done)} / {HumanSize(total)}）" +
+                            HumanEta(watch.Elapsed.TotalSeconds, done, total));
                     }
                 }
             }
@@ -245,6 +254,34 @@ public static class UpdateService
             i++;
         }
         return i == 0 ? $"{bytes} {units[i]}" : $"{v:0.#} {units[i]}";
+    }
+
+    /// <summary>
+    /// 按全程平均速度估算剩余时间；刚开下时速度还没成形（不到 1 秒），返回空串不显示。
+    /// </summary>
+    private static string HumanEta(double elapsedSeconds, long done, long total)
+    {
+        if (elapsedSeconds < 1 || done <= 0) return string.Empty;
+        var speed = done / elapsedSeconds;                       // 字节/秒
+        var remainSeconds = (total - done) / speed;
+        return $" · {HumanSpeed(speed)} · 剩余约 {HumanDuration(remainSeconds)}";
+    }
+
+    private static string HumanSpeed(double bytesPerSecond)
+    {
+        return bytesPerSecond >= 1024 * 1024
+            ? $"{bytesPerSecond / 1024 / 1024:0.0} MB/s"
+            : $"{bytesPerSecond / 1024:0} KB/s";
+    }
+
+    private static string HumanDuration(double seconds)
+    {
+        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0) return "?";
+        if (seconds < 60) return $"{Math.Ceiling(seconds):0} 秒";
+        var minutes = (int)(seconds / 60);
+        return minutes < 60
+            ? $"{minutes} 分 {Math.Round(seconds % 60):00} 秒"
+            : $"{minutes / 60} 小时 {minutes % 60:0} 分";
     }
 
     /// <summary>点分十进制逐段比较，段数不等时缺的按 0 算（1.1 比 1.0.9 新）</summary>
