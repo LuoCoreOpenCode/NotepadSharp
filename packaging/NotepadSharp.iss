@@ -25,6 +25,10 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher=Luo
 DefaultDirName={autopf}\{#MyAppName}
+; 目录选择页必须始终显示：全新安装给默认值；覆盖升级时预填上一次的目录（见 [Code]）。
+; UsePreviousAppDir 必须关掉——开着的话 Inno 检测到已安装会直接跳过目录页，用户就没法改目录了
+DisableDirPage=no
+UsePreviousAppDir=no
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 ; 安装向导/卸载入口也使用同一个图标
@@ -111,6 +115,41 @@ Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Flags: nowait; Check: In
 [Code]
 // 自包含发布已经把 .NET 运行时打进安装包，用户机器不需要预装任何框架，
 // 也就不再需要装前检查运行时的逻辑了。
+
+var
+  PreviousDir: String;   // 上一次安装的目录；全新安装时为空串
+
+// 从卸载注册表键里读上一次的安装目录（InstallLocation）。
+// 机器级安装在 HKLM（64/32 位视图都试），用户级在 HKCU。
+function GetPreviousInstallDir: String;
+var
+  Key: String;
+begin
+  Result := '';
+  Key := 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7E1C4B0A-9F2D-4C63-8A55-2D7B41E0F9C6}_is1';
+  if not RegQueryStringValue(HKLM64, Key, 'InstallLocation', Result) then
+  begin
+    if not RegQueryStringValue(HKLM32, Key, 'InstallLocation', Result) then
+    begin
+      RegQueryStringValue(HKCU, Key, 'InstallLocation', Result);
+    end;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  PreviousDir := RemoveBackslashUnlessRoot(GetPreviousInstallDir);
+  Result := True;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  // UsePreviousAppDir 关掉之后目录页每次都会显示（升级时 Inno 默认会跳过它）。
+  // 这里把默认值换成上一次的安装目录：交互安装时用户看得见、随时可以改；
+  // 静默安装（自动更新走的路）不显示页面，但这段代码同样会执行，保证仍装回原位置。
+  if (CurPageID = wpSelectDir) and (PreviousDir <> '') then
+    WizardForm.DirEdit.Text := PreviousDir;
+end;
 
 function InstallWasSilent: Boolean;
 begin
