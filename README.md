@@ -85,6 +85,18 @@ build.ps1         一键 publish + 编译安装包 + 生成清单
 .github/workflows/release.yml   推 tag 自动构建并发布
 ```
 
+## 支持一下
+
+如果 NotepadSharp 帮到了你，欢迎支持作者一下 🙏
+
+| 扫码领红包 | 赞赏作者 | 关注公众号 |
+| :---: | :---: | :---: |
+| <img src="assets/zfb-hongbao.jpg" width="210"/> | <img src="assets/zfb-shoukuan.jpg" width="210"/> | <img src="assets/weixin-gzh.jpg" width="210"/> |
+
+- 🧧 **领红包**：用支付宝「扫一扫」领红包，你领到红包，作者也能拿到一份奖励，双赢~
+- 💰 **打赏**：想请作者喝杯奶茶的话，扫中间的收款码即可，金额随意，心意最重
+- 📢 **公众号**：新版本动态和使用技巧会发在公众号上，欢迎关注，别错过更新
+
 ## 许可
 
 代码可自由使用。`VsDlls/` 下的 dll 属于 Microsoft Visual Studio 组件，版权归 Microsoft，
