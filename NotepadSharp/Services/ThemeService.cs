@@ -82,6 +82,15 @@ public static class ThemeService
     private static DrawingColor TaskMarkerC => D(0xBE, 0x07, 0xFF);                                 // TODO 标记
     private static DrawingColor ErrorC => D(0xF4, 0x47, 0x47);
 
+    /// <summary>括号配对高亮用的指示器编号（8 已被查找高亮占用）</summary>
+    public const int BraceIndicatorIndex = 9;
+
+    /// <summary>括号配对成功时的高亮框色</summary>
+    public static DrawingColor BraceGoodBox => IsDark ? D(0x3B, 0x51, 0x6D) : D(0xCC, 0xE8, 0xFF);
+
+    /// <summary>括号配不上时的警示框色</summary>
+    public static DrawingColor BraceBadBox => IsDark ? D(0x8B, 0x3A, 0x3A) : D(0xFF, 0x90, 0x90);
+
     // ===== HTML / XML / JSON / CSS 专用 =====
     private static DrawingColor HtmlTagC => IsDark ? D(0xF9, 0x26, 0x72) : D(0x00, 0x00, 0xFF);      // 标签：蓝
     private static DrawingColor HtmlAttrC => IsDark ? D(0xA6, 0xE2, 0x2E) : D(0xFF, 0x00, 0x00);     // 属性：红
@@ -129,10 +138,14 @@ public static class ThemeService
 
         sci.CaretForeColor = IsDark ? D(0xAE, 0xAF, 0xAD) : D(0x00, 0x00, 0x00);
 
-        var braceLight = sci.Styles[ScintillaNET.Style.BraceLight];
-        braceLight.BackColor = IsDark ? D(0x3B, 0x51, 0x6D) : D(0xD6, 0xEA, 0xFF);
-        braceLight.ForeColor = IsDark ? D(0xFF, 0xFF, 0xFF) : D(0x00, 0x00, 0x00);
-        sci.Styles[ScintillaNET.Style.BraceBad].ForeColor = ErrorC;
+        // ===== 括号配对高亮 =====
+        // 样式 34/35（BraceLight/BraceBad）在当前原生 Scintilla 5.3.6 实测不渲染，
+        // 改走 9 号指示器（FullBox 方框），由 EditorControl 在 UpdateUI 里填充。
+        // 8 号指示器已被查找高亮占用，这里用 9 号。
+        var braceInd = sci.Indicators[BraceIndicatorIndex];
+        braceInd.Style = ScintillaNET.IndicatorStyle.FullBox;
+        braceInd.Alpha = 255;
+        braceInd.ForeColor = BraceGoodBox;
 
         var markerColor = IsDark ? D(0xA0, 0xA0, 0xA0) : D(0x90, 0x90, 0x90);
         for (int i = 25; i <= 31; i++)

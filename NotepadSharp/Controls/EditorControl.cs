@@ -151,6 +151,9 @@ public partial class EditorControl : WindowsFormsHost
     // 外部文件拖放接收器：挂在 Scintilla 子窗口上，句柄重建（浮动/停靠）后要重挂
     private FileDropSink? _dropSink;
 
+    // 括号配对高亮当前填了的格子（指示器 9），光标挪走时只清这几个位置
+    private readonly List<int> _braceFill = new();
+
     /// <summary>外部文件被拖到本编辑器上并松手（主窗口据此打开文件）</summary>
     public event Action<string[]>? FilesDropped;
 
@@ -265,8 +268,56 @@ public partial class EditorControl : WindowsFormsHost
 
     private void OnUpdateUI(object? sender, UpdateUIEventArgs e)
     {
+        UpdateBraceMatch();
         CursorPositionChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>
+    /// 光标贴到括号边上时，用 9 号指示器点亮配对的另一半（方框高亮，颜色随主题）；
+    /// 光标在括号前或后都算贴着；找不到配对（比如只有半个括号）就把这只标红。
+    /// 刻意不含 &lt; &gt;：纯文本里比较符号到处都是，会把不相干的字符点亮。
+    /// </summary>
+    private void UpdateBraceMatch()
+    {
+        var sci = _scintilla;
+        var caret = sci.CurrentPosition;
+        int bracePos = -1;
+
+        if (caret > 0 && IsBrace((char)sci.GetCharAt(caret - 1))) bracePos = caret - 1;
+        else if (caret < sci.TextLength && IsBrace((char)sci.GetCharAt(caret))) bracePos = caret;
+
+        ClearBraceFill();
+
+        if (bracePos < 0) return;
+
+        var match = sci.BraceMatch(bracePos);
+        var bad = match < 0;
+        var other = bad ? bracePos : match;
+
+        // 指示器只画在已着色的区域上，先把两个括号附近的着色补齐，避免刚载入的大文件里框不出来
+        sci.Colorize(Math.Min(bracePos, other), Math.Abs(bracePos - other) + 1);
+
+        sci.Indicators[ThemeService.BraceIndicatorIndex].ForeColor =
+            bad ? ThemeService.BraceBadBox : ThemeService.BraceGoodBox;
+        sci.IndicatorCurrent = ThemeService.BraceIndicatorIndex;
+        sci.IndicatorFillRange(bracePos, 1);
+        _braceFill.Add(bracePos);
+        if (!bad)
+        {
+            sci.IndicatorFillRange(match, 1);
+            _braceFill.Add(match);
+        }
+    }
+
+    /// <summary>只清掉自己填的那两个格子，不动别的指示器</summary>
+    private void ClearBraceFill()
+    {
+        _scintilla.IndicatorCurrent = ThemeService.BraceIndicatorIndex;
+        foreach (var pos in _braceFill) _scintilla.IndicatorClearRange(pos, 1);
+        _braceFill.Clear();
+    }
+
+    private static bool IsBrace(char c) => c is '(' or ')' or '[' or ']' or '{' or '}';
 
     private void OnTextChanged(object? sender, EventArgs e)
     {
