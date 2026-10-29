@@ -85,6 +85,18 @@ public partial class FindReplacePanel : UserControl
         return slot;
     }
 
+    /// <summary>
+    /// 从「查找→标记颜色」菜单直接指定色槽：只选中，不像轮色那样自动前进
+    /// （ND2 是 QActionGroup 单选，选完立刻用这个色重标光标处的词）。
+    /// </summary>
+    public void SelectMarkColorSlot(int slot)
+    {
+        MarkColorCombo.SelectedIndex = Math.Clamp(slot, 1, MarkColors.Length) - 1;
+        var settings = SettingsService.Current;
+        settings.MarkColorSlot = MarkColorCombo.SelectedIndex + 1;
+        SettingsService.Save();
+    }
+
     public void SetFindText(string text)
     {
         if (!string.IsNullOrEmpty(text)) FindCombo.Text = text;

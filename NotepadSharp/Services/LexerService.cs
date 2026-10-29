@@ -174,40 +174,46 @@ public static class LexerService
     }
 
     /// <summary>
-    /// 根据文件扩展名获取注释前缀
+    /// 一种语言的三个注释符号，对应 ND2 挂在词法器实例上的 m_commentSymbol / m_commentStart / m_commentEnd
+    /// （ND2 <c>qscilexer*.cpp</c> 构造函数里的赋值）。空串 = 该语言没有这一种注释：
+    /// ND2 的做法是直接不动作（<c>scintillaeditview.cpp:2048/2363/2558</c>），不会退化成 "//"。
     /// </summary>
-    public static string GetCommentPrefix(string filePath)
+    public readonly record struct CommentSymbols(string Line, string Start, string End)
     {
-        var ext = Path.GetExtension(filePath).ToLowerInvariant();
-
-        return ext switch
-        {
-            ".py" or ".sh" or ".rb" or ".yaml" or ".yml" or ".toml" or ".r" or ".mk" => "#",
-            ".sql" => "--",
-            ".lua" => "--",
-            ".vhd" or ".vhdl" => "--",
-            ".asm" or ".s" => ";",
-            ".html" or ".htm" or ".xml" or ".svg" => "<!--",
-            ".md" or ".txt" => "",
-            _ => "//",
-        };
+        public static readonly CommentSymbols None = new(string.Empty, string.Empty, string.Empty);
     }
 
     /// <summary>
-    /// 流式注释（块注释）的起止标记；该语言没有块注释时返回 null。
+    /// ND2 的注释符号按「这个编辑器的语言」给，不是按扩展名的字符串猜。这里同一口径：
+    /// 词法器名决定默认值，<paramref name="pathOrHint"/> 只用来还原 ND2 唯一逐实例改写过的 PHP
+    /// （ND2 <c>scintillaeditview.cpp:672-676</c> 把 html 词法器的符号换成了 c 风格）。
     /// </summary>
-    public static (string Begin, string End)? GetStreamComment(string filePath)
+    public static CommentSymbols GetCommentSymbols(string lexerName, string? pathOrHint)
     {
-        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        if (Path.GetExtension(pathOrHint ?? string.Empty).Equals(".php", StringComparison.OrdinalIgnoreCase))
+            return new CommentSymbols("//", "/*", "*/");
 
-        return ext switch
+        return lexerName switch
         {
-            ".html" or ".htm" or ".xml" or ".svg" => ("<!--", "-->"),
-            ".c" or ".h" or ".cpp" or ".cc" or ".cxx" or ".hpp" or ".hxx" or ".hh" or ".ino"
-                or ".cs" or ".java" or ".js" or ".mjs" or ".cjs" or ".jsx" or ".ts" or ".tsx"
-                or ".go" or ".rs" or ".swift" or ".kt" or ".kts" or ".scala" or ".php"
-                or ".css" or ".less" or ".scss" => ("/*", "*/"),
-            _ => null,
+            "cpp" or "rust" or "verilog" => new CommentSymbols("//", "/*", "*/"),
+            "sql" or "vhdl" => new CommentSymbols("--", "/*", "*/"),
+            "asm" => new CommentSymbols(";", "/*", "*/"),
+            "hypertext" or "xml" => new CommentSymbols(string.Empty, "<!--", "-->"),
+            "css" => new CommentSymbols(string.Empty, "/*", "*/"),
+            "pascal" => new CommentSymbols(string.Empty, "{", "}"),
+            "r" => new CommentSymbols("#", "\"", "\""),
+            "python" or "bash" or "ruby" or "yaml" or "perl" or "props" or "makefile" or "cmake" or "null" =>
+                new CommentSymbols("#", string.Empty, string.Empty),
+            "lua" => new CommentSymbols("--", string.Empty, string.Empty),
+            "matlab" => new CommentSymbols("%", string.Empty, string.Empty),
+            "batch" => new CommentSymbols("REM", string.Empty, string.Empty),
+            "fortran" => new CommentSymbols("!", string.Empty, string.Empty),
+            "vb" => new CommentSymbols("'", string.Empty, string.Empty),
+            // 下面两条是 ND2 createLexer 里根本没建词法器（L_POWERSHELL/L_LISP 返回 nullptr，
+            // 注释三件套在 ND2 里是空操作）但它自己写好的符号；这里按符号表给，见功能对照的偏差记录。
+            "powershell" or "lisp" => new CommentSymbols(";", string.Empty, string.Empty),
+            // ND2 有这些语言类但构造里没写符号（QsciLexerJSON/Markdown/Diff/Ada 等）→ 注释无动作
+            _ => CommentSymbols.None,
         };
     }
 

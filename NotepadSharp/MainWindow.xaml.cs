@@ -63,7 +63,9 @@ public partial class MainWindow : Window
     public ICommand CopyCommand { get; private set; } = null!;
     public ICommand PasteCommand { get; private set; } = null!;
     public ICommand SelectAllCommand { get; private set; } = null!;
-    public ICommand ToggleCommentCommand { get; private set; } = null!;
+    public ICommand LineCommentCommand { get; private set; } = null!;
+    public ICommand AddBlockCommentCommand { get; private set; } = null!;
+    public ICommand DelBlockCommentCommand { get; private set; } = null!;
     public ICommand UpperCaseCommand { get; private set; } = null!;
     public ICommand LowerCaseCommand { get; private set; } = null!;
     public ICommand FindCommand { get; private set; } = null!;
@@ -83,8 +85,11 @@ public partial class MainWindow : Window
     public ICommand ExitCommand { get; private set; } = null!;
     public ICommand AboutCommand { get; private set; } = null!;
     public ICommand ToggleWordWrapCommand { get; private set; } = null!;
-    public ICommand ToggleWhitespaceCommand { get; private set; } = null!;
-    public ICommand ToggleEolCommand { get; private set; } = null!;
+    public ICommand ToggleSpacesCommand { get; private set; } = null!;
+    public ICommand ToggleLineEndCommand { get; private set; } = null!;
+    public ICommand ToggleAllWhiteCommand { get; private set; } = null!;
+    public ICommand ToggleToolBarCommand { get; private set; } = null!;
+    public ICommand ToggleWebAddrCommand { get; private set; } = null!;
     public ICommand ZoomInCommand { get; private set; } = null!;
     public ICommand ZoomOutCommand { get; private set; } = null!;
     public ICommand ZoomResetCommand { get; private set; } = null!;
@@ -112,6 +117,14 @@ public partial class MainWindow : Window
     public ICommand ClearHighlightCommand { get; private set; } = null!;
     public ICommand ToggleTabLockCommand { get; private set; } = null!;
     public ICommand ToggleTopmostCommand { get; private set; } = null!;
+    public ICommand PrePosCommand { get; private set; } = null!;
+    public ICommand NextPosCommand { get; private set; } = null!;
+    public ICommand CutMarkedLinesCommand { get; private set; } = null!;
+    public ICommand CopyMarkedLinesCommand { get; private set; } = null!;
+    public ICommand PasteMarkedLinesCommand { get; private set; } = null!;
+    public ICommand DeleteMarkedLinesCommand { get; private set; } = null!;
+    public ICommand DeleteUnmarkedLinesCommand { get; private set; } = null!;
+    public ICommand InvertMarksCommand { get; private set; } = null!;
 
     public MainWindow()
     {
@@ -125,6 +138,7 @@ public partial class MainWindow : Window
         BuildEncodingMenu();
         BuildFormatMenu();
         BuildLanguageMenu();
+        BuildMarkColorMenu();
         BuildFileTreeContextMenu();
         ApplySettingsToWindow();
 
@@ -461,9 +475,11 @@ public partial class MainWindow : Window
         CopyCommand = new RelayCommand(() => GetCurrentEditor()?.SafeCopy());
         PasteCommand = new RelayCommand(() => GetCurrentEditor()?.SafePaste());
         SelectAllCommand = new RelayCommand(() => GetCurrentEditor()?.Scintilla.SelectAll());
-        ToggleCommentCommand = new RelayCommand(ToggleComment);
-        UpperCaseCommand = new RelayCommand(() => GetCurrentEditor()?.UpperCaseSelection());
-        LowerCaseCommand = new RelayCommand(() => GetCurrentEditor()?.LowerCaseSelection());
+        LineCommentCommand = new RelayCommand(() => Comment(EditorControl.CommentAction.AddDelLineComment));
+        AddBlockCommentCommand = new RelayCommand(() => Comment(EditorControl.CommentAction.AddBlockComment));
+        DelBlockCommentCommand = new RelayCommand(() => Comment(EditorControl.CommentAction.DelBlockComment));
+        UpperCaseCommand = new RelayCommand(() => ChangeCase(EditorControl.CaseMode.Upper));
+        LowerCaseCommand = new RelayCommand(() => ChangeCase(EditorControl.CaseMode.Lower));
         FindCommand = new RelayCommand(ShowFindReplace);
         FindNextCommand = new RelayCommand(FindNext);
         FindPreviousCommand = new RelayCommand(FindPrevious);
@@ -481,8 +497,11 @@ public partial class MainWindow : Window
         ExitCommand = new RelayCommand(() => Close());
         AboutCommand = new RelayCommand(ShowAbout);
         ToggleWordWrapCommand = new RelayCommand(ToggleWordWrap);
-        ToggleWhitespaceCommand = new RelayCommand(ToggleWhitespace);
-        ToggleEolCommand = new RelayCommand(ToggleEol);
+        ToggleSpacesCommand = new RelayCommand(ToggleSpaces);
+        ToggleLineEndCommand = new RelayCommand(ToggleLineEnd);
+        ToggleAllWhiteCommand = new RelayCommand(ToggleAllWhite);
+        ToggleToolBarCommand = new RelayCommand(ToggleToolBar);
+        ToggleWebAddrCommand = new RelayCommand(ToggleWebAddr);
         ZoomInCommand = new RelayCommand(ZoomIn);
         ZoomOutCommand = new RelayCommand(ZoomOut);
         ZoomResetCommand = new RelayCommand(ZoomReset);
@@ -510,6 +529,14 @@ public partial class MainWindow : Window
         ClearHighlightCommand = new RelayCommand(() => GetCurrentEditor()?.ClearFindHighlight());
         ToggleTabLockCommand = new RelayCommand(ToggleTabLock);
         ToggleTopmostCommand = new RelayCommand(ToggleTopmost);
+        PrePosCommand = new RelayCommand(GotoPrePos);
+        NextPosCommand = new RelayCommand(GotoNextPos);
+        CutMarkedLinesCommand = new RelayCommand(CutBookmarkedLines);
+        CopyMarkedLinesCommand = new RelayCommand(CopyBookmarkedLines);
+        PasteMarkedLinesCommand = new RelayCommand(PasteToBookmarkedLines);
+        DeleteMarkedLinesCommand = new RelayCommand(DeleteMarkedLines);
+        DeleteUnmarkedLinesCommand = new RelayCommand(DeleteUnmarkedLines);
+        InvertMarksCommand = new RelayCommand(InvertBookmarks);
     }
 
     private void NewFile()
@@ -549,8 +576,20 @@ public partial class MainWindow : Window
         if (s.ShowFileTree) LoadFileTree();
 
         MenuWordWrap.IsChecked = s.WordWrap;
-        MenuWhitespace.IsChecked = s.ShowWhitespace;
-        MenuEol.IsChecked = s.ShowEol;
+        MenuIndentGuide.IsChecked = s.ShowIndentGuide;
+        MenuFileListView.IsChecked = s.ShowFileTree;
+
+        // 显示工具栏（ND2 :1363-1367：showbar==0 才动）
+        MainToolBar.Visibility = s.ShowToolBar ? Visibility.Visible : Visibility.Collapsed;
+        MenuShowToolBar.IsChecked = s.ShowToolBar;
+
+        // 显示网站（ND2 :1369-1373：showweb==1 才打开静态位）
+        EditorControl.HighlightWebAddr = s.ShowWebAddr;
+        MenuShowWebAddr.IsChecked = s.ShowWebAddr;
+
+        // 显示符号三态：ND2 启动时只回填了「显示所有」两个按钮，另外两项漏了（:3199-3211），
+        // 存成 1/2 再启动时勾选状态是错的。这里统一回填三处，算刻意偏离。
+        SyncBlankShowStatus();
 
         _recentFiles.Clear();
         _recentFiles.AddRange(s.RecentFiles.Where(File.Exists));
@@ -589,7 +628,9 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F3 && !shift) { FindNext(); e.Handled = true; }
         else if (e.Key == Key.F3 && shift) { FindPrevious(); e.Handled = true; }
         else if (e.Key == Key.F4 && !ctrl && !alt && !shift) { FindPrevious(); e.Handled = true; }   // ND2 的上一个用 F4
-        else if (e.Key == Key.F2 && !alt) { ToggleBookmark(); e.Handled = true; }
+        else if (e.Key == Key.F2 && ctrl && !alt) { ToggleBookmark(); e.Handled = true; }
+        else if (e.Key == Key.F2 && shift && !alt) { PreviousBookmark(); e.Handled = true; }
+        else if (e.Key == Key.F2 && !ctrl && !alt) { NextBookmark(); e.Handled = true; }
         else if (e.Key == Key.F7 && !ctrl && !alt && !shift) { ClearAllMarks(); e.Handled = true; }
         else if (e.Key == Key.F8 && !ctrl && !alt && !shift) { WordHighlight(); e.Handled = true; }
         else if (ctrl && !shift && e.Key == Key.G) { GoToLine(); e.Handled = true; }
@@ -607,12 +648,13 @@ public partial class MainWindow : Window
         else if (ctrl && alt && e.Key == Key.F) { RunFindAllShortcut(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.K) { ShowBatchFind(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.C) { OpenColumnEditor(); e.Handled = true; }
-        else if (ctrl && alt && e.Key == Key.D) { DuplicateCurrentLine(); e.Handled = true; }
-        else if (ctrl && alt && e.Key == Key.J) { JoinLines(); e.Handled = true; }
-        else if (ctrl && alt && e.Key == Key.L) { RemoveEmptyLines(false); e.Handled = true; }
+        // 下面四条快捷键与 ND2 的 .ui 一致：Ctrl+D 复制当前行、Ctrl+Shift+↑↓ 移动选区行、Ctrl+Alt+Enter(±Shift) 插空行
+        else if (ctrl && !alt && !shift && e.Key == Key.D) { DuplicateCurrentLine(); e.Handled = true; }
+        else if (ctrl && shift && !alt && e.Key == Key.Up) { MoveSelectedLinesUp(); e.Handled = true; }
+        else if (ctrl && shift && !alt && e.Key == Key.Down) { MoveSelectedLinesDown(); e.Handled = true; }
+        else if (ctrl && alt && !shift && e.Key == Key.Return) { InsertBlankLineAbove(); e.Handled = true; }
+        else if (ctrl && alt && shift && e.Key == Key.Return) { InsertBlankLineBelow(); e.Handled = true; }
         else if (ctrl && shift && e.Key == Key.D) { DeleteCurrentLine(); e.Handled = true; }
-        else if (alt && shift && e.Key == Key.Up) { MoveCurrentLineUp(); e.Handled = true; }
-        else if (alt && shift && e.Key == Key.Down) { MoveCurrentLineDown(); e.Handled = true; }
     }
 
     private void HandleShortcut(string cmd)
@@ -629,11 +671,20 @@ public partial class MainWindow : Window
             case "gotoline": GoToLine(); break;
             case "closefile": CloseCurrentFile(); break;
             case "bookmark": ToggleBookmark(); break;
-            case "comment": ToggleComment(); break;
+            case "bookmarknext": NextBookmark(); break;
+            case "bookmarkprev": PreviousBookmark(); break;
+            case "linecom": Comment(EditorControl.CommentAction.AddDelLineComment); break;
+            case "bkcom": Comment(EditorControl.CommentAction.AddBlockComment); break;
+            case "cbkcom": Comment(EditorControl.CommentAction.DelBlockComment); break;
             case "theme": ToggleTheme(); break;
             case "zoomin": ZoomIn(); break;
             case "zoomout": ZoomOut(); break;
             case "zoomreset": ZoomReset(); break;
+            case "dupline": DuplicateCurrentLine(); break;
+            case "movelineup": MoveSelectedLinesUp(); break;
+            case "movelinedown": MoveSelectedLinesDown(); break;
+            case "blankabove": InsertBlankLineAbove(); break;
+            case "blankbelow": InsertBlankLineBelow(); break;
         }
     }
 
@@ -719,7 +770,6 @@ public partial class MainWindow : Window
 
             editor.LoadContent(content);
             editor.SetLexerForFile(filePath);
-            editor.CommentPrefix = LexerService.GetCommentPrefix(filePath);
             editor.ApplyTheme();
             editor.ReadOnly = doc.IsReadOnly;
 
@@ -784,9 +834,9 @@ public partial class MainWindow : Window
         editor.ApplyTheme();
         var s = SettingsService.Current;
         editor.WordWrap = s.WordWrap;
-        editor.ShowWhitespace = s.ShowWhitespace;
-        editor.ShowEol = s.ShowEol;
-        editor.CommentPrefix = LexerService.GetCommentPrefix(doc.FilePath);
+        editor.BlankShow = s.BlankShow;
+        // 缩进线要在装词法器之后才准（ND2 ccnotepad.cpp:4313），SetLexerByName 里还会再补一次
+        editor.ShowIndentGuides = s.ShowIndentGuide;
 
         // 事件
         editor.CursorPositionChanged += (_, _) => UpdateStatusBar(editor);
@@ -1090,7 +1140,6 @@ public partial class MainWindow : Window
             editor.Scintilla.SetSavePoint();
             doc.IsDirty = false;
             editor.SetLexerForFile(dlg.FileName);
-            editor.CommentPrefix = LexerService.GetCommentPrefix(dlg.FileName);
             editor.ApplyTheme();
             UpdateTabHeader(doc);
             UpdateStatusBar(editor);
@@ -1105,12 +1154,12 @@ public partial class MainWindow : Window
 
     // ==================== 编辑操作 ====================
 
-    private void ToggleComment()
+    /// <summary>注释三件套：只读时提示后不动作（ND2 用 isReadOnly 静默拦截，这里与其余格式操作口径一致）</summary>
+    private void Comment(EditorControl.CommentAction action)
     {
-        var editor = GetCurrentEditor();
+        var editor = FormatEditor();
         if (editor == null) return;
-        var prefix = LexerService.GetCommentPrefix(_currentDocument?.FilePath ?? "");
-        editor.ToggleComment(prefix);
+        editor.Comment(action);
     }
 
     // ==================== 格式菜单（行/列/大小写批量操作） ====================
@@ -1140,25 +1189,48 @@ public partial class MainWindow : Window
     private void RemoveDuplicateLines() => FormatEditor()?.RemoveDuplicateLines();
     private void RemoveDuplicateLinesSorted() => FormatEditor()?.RemoveDuplicateLinesSorted();
 
-    /// <summary>keepOne=true 时把连续空行压成一行，否则全删</summary>
-    private void RemoveEmptyLines(bool keepOne)
+    /// <summary>
+    /// ND2「移除空行」/「移除空行(包括空白字符)」（ccnotepad.cpp:9137/9143）：
+    /// 都是静默调用替换所有，所以文案也照 findwin.cpp:2367 的状态栏那句。
+    /// </summary>
+    private void RemoveEmptyLines(bool containingBlankChars)
     {
         var editor = FormatEditor();
         if (editor == null) return;
-        if (keepOne) editor.RemoveConsecutiveEmptyLines();
-        else editor.RemoveEmptyLines();
+        int count = editor.RemoveEmptyLines(containingBlankChars);
+        StatusBarMessage($"替换完成，一共 {count} 处替换！");
     }
 
     private void RemoveHeadEndEmptyLines() => FormatEditor()?.RemoveHeadEndEmptyLines();
-    private void RemoveLeadingSpace() => FormatEditor()?.RemoveLeadingSpace();
-    private void RemoveTrailingSpace() => FormatEditor()?.RemoveTrailingSpace();
-    private void RemoveAllSpace() => FormatEditor()?.RemoveAllSpace();
+    private void RemoveConsecutiveEmptyLines() => FormatEditor()?.RemoveConsecutiveEmptyLines();
+    private void RemoveHeadBlank()
+    {
+        var editor = FormatEditor();
+        if (editor == null) return;
+        StatusBarMessage($"替换完成，一共 {editor.RemoveLineHeadBlank()} 处替换！");
+    }
+
+    private void RemoveEndBlank()
+    {
+        var editor = FormatEditor();
+        if (editor == null) return;
+        StatusBarMessage($"替换完成，一共 {editor.RemoveLineEndBlank()} 处替换！");
+    }
+
+    private void RemoveHeadEndBlank()
+    {
+        var editor = FormatEditor();
+        if (editor == null) return;
+        var (_, end) = editor.RemoveLineHeadEndBlank();
+        // ND2 是连着调两次 slot_replaceAll，两条状态栏消息后一条盖掉前一条，所以这里只报行尾那次的数
+        StatusBarMessage($"替换完成，一共 {end} 处替换！");
+    }
 
     private void InsertBlankLineAbove() => FormatEditor()?.InsertBlankLineAbove();
     private void InsertBlankLineBelow() => FormatEditor()?.InsertBlankLineBelow();
     private void DuplicateCurrentLine() => FormatEditor()?.DuplicateCurrentLine();
-    private void MoveCurrentLineUp() => FormatEditor()?.MoveCurrentLineUp();
-    private void MoveCurrentLineDown() => FormatEditor()?.MoveCurrentLineDown();
+    private void MoveSelectedLinesUp() => FormatEditor()?.MoveSelectedLinesUp();
+    private void MoveSelectedLinesDown() => FormatEditor()?.MoveSelectedLinesDown();
     private void DeleteCurrentLine() => FormatEditor()?.DeleteCurrentLine();
     private void DeleteToLineStart() => FormatEditor()?.DeleteToLineStart();
     private void DeleteToLineEnd() => FormatEditor()?.DeleteToLineEnd();
@@ -1167,60 +1239,14 @@ public partial class MainWindow : Window
     private void CopyToLineEnd() => GetCurrentEditor()?.CopyToLineEnd();
     private void JoinLines() => FormatEditor()?.JoinLines();
     private void SplitLines() => FormatEditor()?.SplitLines();
+    private void ExpandEscapedNewlines() => FormatEditor()?.ExpandEscapedNewlines();
     private void PadLinesToEqualWidth() => FormatEditor()?.PadLinesToEqualWidth();
 
     private void ChangeCase(EditorControl.CaseMode mode) => FormatEditor()?.ChangeCase(mode);
 
-    private void TabsToSpaces()
-    {
-        var editor = FormatEditor();
-        if (editor == null) return;
-        editor.TabsToSpaces(leadingOnly: _menuTabLeadingOnly?.IsChecked == true);
-    }
+    private void TabsToSpaces() => FormatEditor()?.TabsToSpaces();
 
-    private void SpacesToTabsMenu(bool leadingOnly)
-    {
-        var editor = FormatEditor();
-        if (editor == null) return;
-        editor.SpacesToTabs(leadingOnly);
-    }
-
-    private void BlockComment(bool lineComment)
-    {
-        var editor = FormatEditor();
-        if (editor == null) return;
-
-        string path = _currentDocument?.FilePath ?? string.Empty;
-        if (lineComment)
-        {
-            string prefix = LexerService.GetCommentPrefix(path);
-            if (string.IsNullOrEmpty(prefix))
-            {
-                StatusBarMessage("当前语言没有行注释前缀");
-                return;
-            }
-            editor.BlockComment(prefix);
-            return;
-        }
-
-        var pair = LexerService.GetStreamComment(path);
-        if (pair == null)
-        {
-            StatusBarMessage("当前语言没有流式注释");
-            return;
-        }
-        // StreamComment 自身是开关式的：已包住就拆开
-        editor.StreamComment(pair.Value.Begin, pair.Value.End);
-    }
-
-    private void BlockUncomment()
-    {
-        var editor = FormatEditor();
-        if (editor == null) return;
-        string prefix = LexerService.GetCommentPrefix(_currentDocument?.FilePath ?? string.Empty);
-        if (string.IsNullOrEmpty(prefix)) { StatusBarMessage("当前语言没有行注释前缀"); return; }
-        editor.BlockUncomment(prefix);
-    }
+    private void SpacesToTabsMenu(bool leadingOnly) => FormatEditor()?.SpacesToTabs(leadingOnly);
 
     private void ConvertEol(ScintillaNET.Eol eol)
     {
@@ -1279,12 +1305,15 @@ public partial class MainWindow : Window
 
     private void AutoCompleteFromDocument() => GetCurrentEditor()?.AutoCompleteFromDocument();
 
-    private void CopyBookmarkedLines() => GetCurrentEditor()?.CopyLinesWithBookmarks();
-    private void DeleteBookmarkedLines() => FormatEditor()?.DeleteLinesWithBookmarks();
+    // 书签的批量操作：读操作（复制）任何文档都能用，写操作走 FormatEditor 的只读/十六进制闸门
+    private void CopyBookmarkedLines() => GetCurrentEditor()?.CopyMarkedLines();
+    private void CutBookmarkedLines() => FormatEditor()?.CutMarkedLines();
+    private void PasteToBookmarkedLines() => FormatEditor()?.PasteToMarkedLines();
+    private void DeleteMarkedLines() => FormatEditor()?.DeleteMarkedLines(true);
+    private void DeleteUnmarkedLines() => FormatEditor()?.DeleteMarkedLines(false);
     private void InvertBookmarks() => FormatEditor()?.ToggleBookmarksOthers();
 
     private MenuItem _menuColumnMode = null!;
-    private MenuItem _menuTabLeadingOnly = null!;
 
     /// <summary>
     /// 用代码生成「格式」菜单：项目里同类菜单太长，XAML 写 40 个 Click 处理器不划算，
@@ -1297,13 +1326,6 @@ public partial class MainWindow : Window
         _menuColumnMode = new MenuItem { Header = "列编辑模式", IsCheckable = true };
         _menuColumnMode.Click += (_, _) => ToggleColumnMode();
 
-        _menuTabLeadingOnly = new MenuItem { Header = "仅处理行首", IsCheckable = true, IsChecked = SettingsService.Current.TabLeadingOnly };
-        _menuTabLeadingOnly.Click += (_, _) =>
-        {
-            SettingsService.Current.TabLeadingOnly = _menuTabLeadingOnly.IsChecked;
-            SettingsService.Save();
-        };
-
         static MenuItem Item(string header, Action action, string gesture = "")
         {
             var item = new MenuItem { Header = header, InputGestureText = gesture };
@@ -1312,75 +1334,74 @@ public partial class MainWindow : Window
         }
         static Separator Sep() => new();
 
-        var sortMenu = new MenuItem { Header = "排序(_S)" };
-        sortMenu.Items.Add(Item("行按字典序升序", () => SortLines(EditorControl.SortMode.LexAsc)));
-        sortMenu.Items.Add(Item("行按字典序降序", () => SortLines(EditorControl.SortMode.LexDesc)));
-        sortMenu.Items.Add(Item("忽略大小写升序", () => SortLines(EditorControl.SortMode.LexAscIgnoreCase)));
-        sortMenu.Items.Add(Item("忽略大小写降序", () => SortLines(EditorControl.SortMode.LexDescIgnoreCase)));
-        sortMenu.Items.Add(Sep());
-        sortMenu.Items.Add(Item("按整数升序", () => SortLines(EditorControl.SortMode.IntegerAsc)));
-        sortMenu.Items.Add(Item("按整数降序", () => SortLines(EditorControl.SortMode.IntegerDesc)));
-        sortMenu.Items.Add(Item("按小数升序（小数点）", () => SortLines(EditorControl.SortMode.DecimalDotAsc)));
-        sortMenu.Items.Add(Item("按小数降序（小数点）", () => SortLines(EditorControl.SortMode.DecimalDotDesc)));
-        sortMenu.Items.Add(Item("按小数升序（逗号）", () => SortLines(EditorControl.SortMode.DecimalCommaAsc)));
-        sortMenu.Items.Add(Item("按小数降序（逗号）", () => SortLines(EditorControl.SortMode.DecimalCommaDesc)));
-        sortMenu.Items.Add(Sep());
-        sortMenu.Items.Add(Item("倒序排列行", () => SortLines(EditorControl.SortMode.ReverseOrder)));
-        sortMenu.Items.Add(Item("随机打乱行", () => SortLines(EditorControl.SortMode.Randomize)));
-        FormatMenu.Items.Add(sortMenu);
+        // 「行编辑」照 ND2 的 menuLine_Operations（ccnotepad.ui:147-167）：15 项、顺序、文案、快捷键逐条对齐。
+        // 数值排序/随机行序/连续去重在 ND2 是 .ui 里没接线的死控件，全部挪进后面的「更多行操作」。
+        var lineEditMenu = new MenuItem { Header = "行编辑(_L)" };
+        lineEditMenu.Items.Add(Item("复制当前行", DuplicateCurrentLine, "Ctrl+D"));
+        lineEditMenu.Items.Add(Item("删除重复行", RemoveDuplicateLines));
+        lineEditMenu.Items.Add(Item("分割行", SplitLines));
+        lineEditMenu.Items.Add(Item("合并行", JoinLines));
+        lineEditMenu.Items.Add(Item("上移当前行", MoveSelectedLinesUp, "Ctrl+Shift+↑"));
+        lineEditMenu.Items.Add(Item("下移当前行", MoveSelectedLinesDown, "Ctrl+Shift+↓"));
+        lineEditMenu.Items.Add(Item("移除空行", () => RemoveEmptyLines(false)));
+        lineEditMenu.Items.Add(Item("移除空行(包括空白字符)", () => RemoveEmptyLines(true)));
+        lineEditMenu.Items.Add(Item("在当前行上方插入空行", InsertBlankLineAbove, "Ctrl+Alt+Enter"));
+        lineEditMenu.Items.Add(Item("在当前行下方插入空行", InsertBlankLineBelow, "Ctrl+Alt+Shift+Enter"));
+        lineEditMenu.Items.Add(Item("反排序行", () => SortLines(EditorControl.SortMode.ReverseOrder)));
+        lineEditMenu.Items.Add(Sep());
+        lineEditMenu.Items.Add(Item("升序排列文本行", () => SortLines(EditorControl.SortMode.LexAsc)));
+        lineEditMenu.Items.Add(Item("升序排列文本行（不分大小写）", () => SortLines(EditorControl.SortMode.LexAscIgnoreCase)));
+        lineEditMenu.Items.Add(Item("降序排列文本行", () => SortLines(EditorControl.SortMode.LexDesc)));
+        lineEditMenu.Items.Add(Item("降序排列文本行（不分大小写）", () => SortLines(EditorControl.SortMode.LexDescIgnoreCase)));
+        FormatMenu.Items.Add(lineEditMenu);
 
-        var dedupMenu = new MenuItem { Header = "去重(_D)" };
-        dedupMenu.Items.Add(Item("删除相邻重复行", RemoveConsecutiveDuplicateLines));
-        dedupMenu.Items.Add(Item("删除重复行（保留顺序）", RemoveDuplicateLines));
-        dedupMenu.Items.Add(Item("删除重复行（去重后排序）", RemoveDuplicateLinesSorted));
-        FormatMenu.Items.Add(dedupMenu);
-
-        var blankMenu = new MenuItem { Header = "空行(_B)" };
-        blankMenu.Items.Add(Item("删除所有空行", () => RemoveEmptyLines(false), "Ctrl+Alt+L"));
-        blankMenu.Items.Add(Item("连续空行压成一行", () => RemoveEmptyLines(true)));
-        blankMenu.Items.Add(Item("删除首尾空行", RemoveHeadEndEmptyLines));
-        FormatMenu.Items.Add(blankMenu);
-
-        var blankCharMenu = new MenuItem { Header = "空白字符(_W)" };
-        blankCharMenu.Items.Add(Item("删除行首空白", RemoveLeadingSpace));
-        blankCharMenu.Items.Add(Item("删除行尾空白", RemoveTrailingSpace));
-        blankCharMenu.Items.Add(Item("删除行首行尾空白", RemoveAllSpace));
-        blankCharMenu.Items.Add(Sep());
-        blankCharMenu.Items.Add(Item("空格转制表符（整行）", () => SpacesToTabsMenu(leadingOnly: false)));
-        blankCharMenu.Items.Add(Item("空格转制表符（仅行首）", () => SpacesToTabsMenu(leadingOnly: true)));
-        blankCharMenu.Items.Add(Item("制表符转空格", TabsToSpaces));
-        blankCharMenu.Items.Add(_menuTabLeadingOnly);
-        FormatMenu.Items.Add(blankCharMenu);
-
-        var lineMenu = new MenuItem { Header = "当前行(_L)" };
-        lineMenu.Items.Add(Item("在上方插入空行", InsertBlankLineAbove));
-        lineMenu.Items.Add(Item("在下方插入空行", InsertBlankLineBelow));
-        lineMenu.Items.Add(Item("复制当前行", DuplicateCurrentLine, "Ctrl+Alt+D"));
-        lineMenu.Items.Add(Item("上移当前行", MoveCurrentLineUp, "Alt+Shift+↑"));
-        lineMenu.Items.Add(Item("下移当前行", MoveCurrentLineDown, "Alt+Shift+↓"));
-        lineMenu.Items.Add(Item("删除当前行", DeleteCurrentLine, "Ctrl+Shift+D"));
-        lineMenu.Items.Add(Sep());
-        lineMenu.Items.Add(Item("剪切到行尾", CutCurrentLine));
-        lineMenu.Items.Add(Item("复制到行尾", CopyToLineEnd));
-        lineMenu.Items.Add(Item("复制到整行", CopyCurrentLine));
-        lineMenu.Items.Add(Item("删除到行首", DeleteToLineStart));
-        lineMenu.Items.Add(Item("删除到行尾", DeleteToLineEnd));
-        lineMenu.Items.Add(Sep());
-        lineMenu.Items.Add(Item("合并选中行", JoinLines, "Ctrl+Alt+J"));
-        lineMenu.Items.Add(Item("按显示宽度拆分行", SplitLines));
-        lineMenu.Items.Add(Item("各行补齐到相同宽度", PadLinesToEqualWidth));
-        FormatMenu.Items.Add(lineMenu);
-
-        var caseMenu = new MenuItem { Header = "大小写(_C)" };
-        caseMenu.Items.Add(Item("全部大写", () => ChangeCase(EditorControl.CaseMode.Upper)));
-        caseMenu.Items.Add(Item("全部小写", () => ChangeCase(EditorControl.CaseMode.Lower)));
-        caseMenu.Items.Add(Item("首字母大写（单词）", () => ChangeCase(EditorControl.CaseMode.Proper)));
-        caseMenu.Items.Add(Item("首字母大写（混合）", () => ChangeCase(EditorControl.CaseMode.ProperBlend)));
-        caseMenu.Items.Add(Item("句首大写", () => ChangeCase(EditorControl.CaseMode.Sentence)));
-        caseMenu.Items.Add(Item("句首大写（混合）", () => ChangeCase(EditorControl.CaseMode.SentenceBlend)));
-        caseMenu.Items.Add(Item("反转大小写", () => ChangeCase(EditorControl.CaseMode.Invert)));
+        // 「大小写转换」照 menuConvert_Case_to（ccnotepad.ui:134-146）：8 项，ND2 一个快捷键都没给
+        var caseMenu = new MenuItem { Header = "大小写转换(_C)" };
+        caseMenu.Items.Add(Item("转成大写", () => ChangeCase(EditorControl.CaseMode.Upper)));
+        caseMenu.Items.Add(Item("转成小写", () => ChangeCase(EditorControl.CaseMode.Lower)));
+        caseMenu.Items.Add(Item("每词转成仅首字母大写", () => ChangeCase(EditorControl.CaseMode.Proper)));
+        caseMenu.Items.Add(Item("每词的首字母转成大写", () => ChangeCase(EditorControl.CaseMode.ProperBlend)));
+        caseMenu.Items.Add(Item("每句转成仅首字母大写", () => ChangeCase(EditorControl.CaseMode.Sentence)));
+        caseMenu.Items.Add(Item("每句的首字母转成大写", () => ChangeCase(EditorControl.CaseMode.SentenceBlend)));
+        caseMenu.Items.Add(Item("大小写互换", () => ChangeCase(EditorControl.CaseMode.Invert)));
         caseMenu.Items.Add(Item("随机大小写", () => ChangeCase(EditorControl.CaseMode.Random)));
         FormatMenu.Items.Add(caseMenu);
+
+        // 「空白字符操作」照 ND2 menuBlank_CharOperate（ccnotepad.ui:122-133）：顺序 TAB 转空格在前、
+        // 空格转 TAB (全部) / (行首) 在后，6 项一个快捷键都没有（zh.ts:1615/1621/1627/1723/1729/1735 的文案原样抄）
+        var blankCharMenu = new MenuItem { Header = "空白字符操作(_W)" };
+        blankCharMenu.Items.Add(Item("去除行首空白", RemoveHeadBlank));
+        blankCharMenu.Items.Add(Item("去除行尾空白", RemoveEndBlank));
+        blankCharMenu.Items.Add(Item("去除行首尾空白", RemoveHeadEndBlank));
+        blankCharMenu.Items.Add(Sep());
+        blankCharMenu.Items.Add(Item("TAB 转空格", TabsToSpaces));
+        blankCharMenu.Items.Add(Item("空格转 TAB (全部)", () => SpacesToTabsMenu(leadingOnly: false)));
+        blankCharMenu.Items.Add(Item("空格转 TAB (行首)", () => SpacesToTabsMenu(leadingOnly: true)));
+        FormatMenu.Items.Add(blankCharMenu);
+
+        var moreLineMenu = new MenuItem { Header = "更多行操作(_M)" };
+        moreLineMenu.Items.Add(Item("展开选区里的 \\n 转义", ExpandEscapedNewlines));
+        moreLineMenu.Items.Add(Item("删除相邻重复行", RemoveConsecutiveDuplicateLines));
+        moreLineMenu.Items.Add(Item("删除重复行（去重后排序）", RemoveDuplicateLinesSorted));
+        moreLineMenu.Items.Add(Item("连续空行压成一行", RemoveConsecutiveEmptyLines));
+        moreLineMenu.Items.Add(Item("删除首尾空行", RemoveHeadEndEmptyLines));
+        moreLineMenu.Items.Add(Sep());
+        moreLineMenu.Items.Add(Item("按整数升序", () => SortLines(EditorControl.SortMode.IntegerAsc)));
+        moreLineMenu.Items.Add(Item("按整数降序", () => SortLines(EditorControl.SortMode.IntegerDesc)));
+        moreLineMenu.Items.Add(Item("按小数升序（小数点）", () => SortLines(EditorControl.SortMode.DecimalDotAsc)));
+        moreLineMenu.Items.Add(Item("按小数降序（小数点）", () => SortLines(EditorControl.SortMode.DecimalDotDesc)));
+        moreLineMenu.Items.Add(Item("按小数升序（逗号）", () => SortLines(EditorControl.SortMode.DecimalCommaAsc)));
+        moreLineMenu.Items.Add(Item("按小数降序（逗号）", () => SortLines(EditorControl.SortMode.DecimalCommaDesc)));
+        moreLineMenu.Items.Add(Item("随机打乱行", () => SortLines(EditorControl.SortMode.Randomize)));
+        moreLineMenu.Items.Add(Sep());
+        moreLineMenu.Items.Add(Item("删除当前行", DeleteCurrentLine, "Ctrl+Shift+D"));
+        moreLineMenu.Items.Add(Item("剪切到行尾", CutCurrentLine));
+        moreLineMenu.Items.Add(Item("复制到行尾", CopyToLineEnd));
+        moreLineMenu.Items.Add(Item("复制到整行", CopyCurrentLine));
+        moreLineMenu.Items.Add(Item("删除到行首", DeleteToLineStart));
+        moreLineMenu.Items.Add(Item("删除到行尾", DeleteToLineEnd));
+        moreLineMenu.Items.Add(Item("各行补齐到相同宽度", PadLinesToEqualWidth));
+        FormatMenu.Items.Add(moreLineMenu);
 
         var eolMenu = new MenuItem { Header = "行尾符(_E)" };
         eolMenu.Items.Add(Item("Windows: CR LF", () => ConvertEol(ScintillaNET.Eol.CrLf)));
@@ -1388,21 +1409,12 @@ public partial class MainWindow : Window
         eolMenu.Items.Add(Item("Unix: LF", () => ConvertEol(ScintillaNET.Eol.Lf)));
         FormatMenu.Items.Add(eolMenu);
 
-        var bookmarkMenu = new MenuItem { Header = "书签行(_M)" };
-        bookmarkMenu.Items.Add(Item("复制所有书签行", CopyBookmarkedLines));
-        bookmarkMenu.Items.Add(Item("删除所有书签行", DeleteBookmarkedLines));
-        bookmarkMenu.Items.Add(Item("反转书签", InvertBookmarks));
-        FormatMenu.Items.Add(bookmarkMenu);
 
         FormatMenu.Items.Add(Sep());
         FormatMenu.Items.Add(_menuColumnMode);
         FormatMenu.Items.Add(Item("列编辑器…", OpenColumnEditor, "Alt+C"));
         FormatMenu.Items.Add(Item("给选中各行行首加光标", () => GetCurrentEditor()?.AddCaretsToLineStarts()));
         FormatMenu.Items.Add(Item("把选区粘贴到每一行行首", () => GetCurrentEditor()?.PasteToEachSelectedLine()));
-        FormatMenu.Items.Add(Sep());
-        FormatMenu.Items.Add(Item("块注释", () => BlockComment(lineComment: true)));
-        FormatMenu.Items.Add(Item("取消块注释", () => BlockUncomment()));
-        FormatMenu.Items.Add(Item("流式注释 /* */", () => BlockComment(lineComment: false)));
         FormatMenu.Items.Add(Sep());
         var formatLangMenu = new MenuItem { Header = "格式化(_F)" };
         formatLangMenu.Items.Add(Item("格式化 JSON", FormatJson, "Ctrl+Shift+F"));
@@ -1503,9 +1515,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        // ND2 replaceAll（findwin.cpp:2324）：先确认，替换完只写状态栏，不弹结果框
+        if (MessageBox.Show(this, "是否确认在当前打开的文档中替换？", "在当前文件中替换所有",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+
         int count = editor.ReplaceAll(_lastFind, _lastReplace);
         FindReplacePanel.SetMatchCount(editor.CountMatches(_lastFind));
-        MessageBox.Show(this, $"替换完成，共替换 {count} 处。", "替换", MessageBoxButton.OK, MessageBoxImage.Information);
+        StatusBarMessage($"替换完成，一共 {count} 处替换！");
     }
 
     /// <summary>
@@ -1586,11 +1602,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>ND2 工具栏「单词高亮」(F8)：选中就用选区，否则光标处的词；再按一次取消</summary>
-    private void WordHighlight()
+    private void WordHighlight(int? fixedSlot = null)
     {
         var editor = GetCurrentEditor();
         if (editor == null) return;
-        int slot = FindReplacePanel.TakeMarkSlot();
+        // 从「标记颜色」菜单过来时用指定色，不吃轮色；轮色只属于 Mark 面板那套
+        int slot = fixedSlot ?? FindReplacePanel.TakeMarkSlot();
         int count = editor.ToggleWordMark(slot);
         StatusBarMessage(count == 0 ? "已取消当前单词的高亮" : $"已高亮当前单词：{count} 处");
     }
@@ -1598,6 +1615,45 @@ public partial class MainWindow : Window
     private void OnWordHighlight(object sender, RoutedEventArgs e) => WordHighlight();
 
     private void OnClearAllHighlight(object sender, RoutedEventArgs e) => ClearAllMarks();
+
+    /// <summary>
+    /// 「查找→标记颜色」：照 ND2 的 QActionGroup（ccnotepad.cpp:2130-2171），5 个色块单选，
+    /// 并且选完立刻用这个色重标光标处的词（slot_markColorGroup 末尾直接调 slot_wordHighlight）。
+    /// </summary>
+    private void BuildMarkColorMenu()
+    {
+        for (int i = 0; i < EditorControl.MarkColorCount; i++)
+        {
+            int slot = i + 1;
+            var c = EditorControl.MarkColors[i];
+            var item = new MenuItem
+            {
+                Header = $"颜色 {slot}",
+                IsCheckable = true,
+                IsChecked = SettingsService.Current.MarkColorSlot == slot,
+                Icon = new System.Windows.Shapes.Rectangle
+                {
+                    Width = 16,
+                    Height = 10,
+                    Margin = new Thickness(2, 0, 4, 0),
+                    Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(
+                        (byte)(c >> 16), (byte)(c >> 8), (byte)c)),
+                },
+            };
+
+            item.Click += (_, _) =>
+            {
+                // WPF 的 MenuItem 没有 QActionGroup 的互斥，勾要自己收
+                foreach (object obj in MarkColorMenu.Items)
+                {
+                    if (obj is MenuItem mi) mi.IsChecked = ReferenceEquals(mi, item);
+                }
+                FindReplacePanel.SelectMarkColorSlot(slot);
+                WordHighlight(slot);
+            };
+            MarkColorMenu.Items.Add(item);
+        }
+    }
 
     private void OnFindCloseRequested(object? sender, EventArgs e)
     {
@@ -2163,6 +2219,39 @@ public partial class MainWindow : Window
         if (line != null) editor.GoToLine(line.Value);
     }
 
+    // ND2 把这对按钮做成「hex 翻页 / 文本位置回退」两用，按当前标签的文档类型分支（ccnotepad.cpp:7969-8040）
+    private void GotoPrePos()
+    {
+        if (_currentDocument?.IsHexView == true)
+        {
+            StatusBarMessage("十六进制翻页还没接（现在的 hex 是整篇渲染，没有分页）");
+            return;
+        }
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        if (!editor.GotoPrePos())
+        {
+            System.Media.SystemSounds.Beep.Play();
+            StatusBarMessage("没有前一个位置了");
+        }
+    }
+
+    private void GotoNextPos()
+    {
+        if (_currentDocument?.IsHexView == true)
+        {
+            StatusBarMessage("十六进制翻页还没接（现在的 hex 是整篇渲染，没有分页）");
+            return;
+        }
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        if (!editor.GotoNextPos())
+        {
+            System.Media.SystemSounds.Beep.Play();
+            StatusBarMessage("没有后一个位置了");
+        }
+    }
+
     private void ClearBookmarks()
     {
         var editor = GetCurrentEditor();
@@ -2256,20 +2345,47 @@ public partial class MainWindow : Window
         SettingsService.Current.WordWrap = v;
     }
 
-    private void ToggleWhitespace()
+    /// <summary>
+    /// ND2 changeBlankShowStatus（ccnotepad.cpp:6733-6756）：状态没变就什么都不做，
+    /// 变了就对所有编辑器一起下发、落盘，最后把三个菜单项的状态同步回来。
+    /// </summary>
+    private void ChangeBlankShowStatus(int blankShow)
     {
-        bool v = !(GetCurrentEditor()?.ShowWhitespace ?? false);
-        foreach (var e in _itemEditors.Values) e.ShowWhitespace = v;
-        MenuWhitespace.IsChecked = v;
-        SettingsService.Current.ShowWhitespace = v;
+        if ((GetCurrentEditor()?.BlankShow ?? SettingsService.Current.BlankShow) == blankShow) return;
+
+        foreach (var e in _itemEditors.Values) e.BlankShow = blankShow;
+        SettingsService.Current.BlankShow = blankShow;
+        SyncBlankShowStatus();
     }
 
-    private void ToggleEol()
+    /// <summary>ND2 syncBlankShowStatus（:6722-6730）：三个菜单项按位域回填，显示所有 = 3</summary>
+    private void SyncBlankShowStatus()
     {
-        bool v = !(GetCurrentEditor()?.ShowEol ?? false);
-        foreach (var e in _itemEditors.Values) e.ShowEol = v;
-        MenuEol.IsChecked = v;
-        SettingsService.Current.ShowEol = v;
+        int blankShow = GetCurrentEditor()?.BlankShow ?? SettingsService.Current.BlankShow;
+        MenuShowSpaces.IsChecked = (blankShow & 1) != 0;
+        MenuShowLineEnd.IsChecked = (blankShow & 2) != 0;
+        MenuShowAllWhite.IsChecked = blankShow == 3;
+    }
+
+    /// <summary>只控制空格和 TAB，不控制行尾（ND2 slot_show_spaces :6768-6780）</summary>
+    private void ToggleSpaces()
+    {
+        int blankShow = GetCurrentEditor()?.BlankShow ?? SettingsService.Current.BlankShow;
+        ChangeBlankShowStatus((blankShow & 1) != 0 ? blankShow & 0xe : blankShow | 0x1);
+    }
+
+    /// <summary>只控制行尾（ND2 slot_show_line_end :7744-7756）</summary>
+    private void ToggleLineEnd()
+    {
+        int blankShow = GetCurrentEditor()?.BlankShow ?? SettingsService.Current.BlankShow;
+        ChangeBlankShowStatus((blankShow & 2) != 0 ? blankShow & 0xd : blankShow | 0x2);
+    }
+
+    /// <summary>工具栏那个空白按钮 / 菜单「显示所有」：全开或全关（ND2 slot_allWhite :6760-6765）</summary>
+    private void ToggleAllWhite()
+    {
+        int blankShow = GetCurrentEditor()?.BlankShow ?? SettingsService.Current.BlankShow;
+        ChangeBlankShowStatus(blankShow == 3 ? 0 : 3);
     }
 
     private void ZoomIn()
@@ -2296,11 +2412,40 @@ public partial class MainWindow : Window
         UpdateStatusBar(e);
     }
 
+    /// <summary>
+    /// 缩进参考线（ND2 slot_indentGuide :6784-6801）。ND2 只对文本页下发，hex 页不动；这里同样跳过 hex。
+    /// </summary>
     private void ToggleIndentGuide()
     {
-        bool v = !(GetCurrentEditor()?.ShowIndentGuides ?? true);
-        foreach (var e in _itemEditors.Values) e.ShowIndentGuides = v;
+        bool v = !(GetCurrentEditor()?.ShowIndentGuides ?? SettingsService.Current.ShowIndentGuide);
+        foreach (var (doc, item) in _documentItems)
+        {
+            if (doc.IsHexView) continue;
+            if (_itemEditors.TryGetValue(item, out var e)) e.ShowIndentGuides = v;
+        }
         MenuIndentGuide.IsChecked = v;
+        SettingsService.Current.ShowIndentGuide = v;
+    }
+
+    /// <summary>显示工具栏（ND2 slot_showToolBar :9873-9878：只切可见性 + 落盘）</summary>
+    private void ToggleToolBar()
+    {
+        bool v = MainToolBar.Visibility != Visibility.Visible;
+        MainToolBar.Visibility = v ? Visibility.Visible : Visibility.Collapsed;
+        MenuShowToolBar.IsChecked = v;
+        SettingsService.Current.ShowToolBar = v;
+    }
+
+    /// <summary>
+    /// 显示网站（ND2 slot_showWebAddr :9880-9885）：只改进程级静态位 + 落盘，
+    /// 不回头刷新已经开着的编辑器 —— 关掉以后旧的热点残影留着，是 ND2 的原有表现。
+    /// </summary>
+    private void ToggleWebAddr()
+    {
+        bool v = !EditorControl.HighlightWebAddr;
+        EditorControl.HighlightWebAddr = v;
+        MenuShowWebAddr.IsChecked = v;
+        SettingsService.Current.ShowWebAddr = v;
     }
 
     private void SetTheme(ThemeService.ThemeMode mode)
@@ -2327,8 +2472,28 @@ public partial class MainWindow : Window
         }
     }
 
-    // ==================== 保存/关闭 ====================
+    /// <summary>
+    /// ND2 的 Tab 设置在「选项 → 文本和字体」页里（texteditsetwin），改完在关页时落到所有已打开编辑器
+    /// （ccnotepad.cpp:8541 slot_tabFormatChange），这里照抄：关窗才生效 + 遍历所有标签页
+    /// </summary>
+    private void OnTabSettings(object sender, RoutedEventArgs e)
+    {
+        var s = SettingsService.Current;
+        var win = new Views.TabSettingsWindow(s.TabWidth, s.ReplaceTabWithSpace, (len, replace) =>
+        {
+            s.TabWidth = len;
+            s.ReplaceTabWithSpace = replace;
+            foreach (var editor in _itemEditors.Values) editor.ApplyTabSettings();
+            // ND2 退出程序时才写回 tablens/tabnouse，这里顺手落盘，避免崩了丢设置
+            SettingsService.Save();
+        })
+        {
+            Owner = this,
+        };
+        win.Show();
+    }
 
+    // ==================== 保存/关闭 ====================
     private void SaveAll()
     {
         var original = _currentDocument;
@@ -2458,7 +2623,6 @@ public partial class MainWindow : Window
             doc.DiskTimestamp = File.GetLastWriteTime(doc.FilePath);
             doc.DiskLength = bytes.LongLength;
             editor.SetLexerForFile(doc.FilePath);
-            editor.CommentPrefix = LexerService.GetCommentPrefix(doc.FilePath);
             editor.ApplyTheme();
             UpdateTabHeader(doc);
             UpdateStatusBar(editor);
@@ -2731,7 +2895,6 @@ public partial class MainWindow : Window
             var ed = _itemEditors[tab];
             ed.LoadContent(html);
             ed.SetLexerForFile("converted.html");
-            ed.CommentPrefix = "<!--";
             ed.ApplyTheme();
         }
         catch (Exception ex)
@@ -2902,7 +3065,8 @@ public partial class MainWindow : Window
                 var editor = GetCurrentEditor();
                 if (editor == null) return;
                 editor.SetLexerByName(lexer, hint);
-                StatusLang.Text = $"语法: {(lexer == "null" ? "text" : display.ToLowerInvariant())}";
+                editor.LanguageDisplay = lexer == "null" ? "Text" : display;
+                UpdateStatusBar(editor);
             };
             LanguageMenu.Items.Add(item);
         }
@@ -2914,6 +3078,7 @@ public partial class MainWindow : Window
     {
         FileTreePanel.Visibility = FileTreePanel.Visibility == Visibility.Visible
             ? Visibility.Collapsed : Visibility.Visible;
+        MenuFileListView.IsChecked = FileTreePanel.Visibility == Visibility.Visible;
 
         if (FileTreePanel.Visibility == Visibility.Visible && FileTree.Items.Count == 0)
         {
@@ -3287,10 +3452,9 @@ public partial class MainWindow : Window
         {
             StatusEncoding.Text = EncodingService.GetDisplayName(_currentDocument.CodePage, _currentDocument.HasBom);
 
-            var lang = _currentDocument.FilePath.Length > 0
-                ? LexerService.GetLanguageName(_currentDocument.FilePath)
-                : "Text";
-            StatusLang.Text = $"语法: {lang.ToLowerInvariant()}";
+            // 语法栏跟着编辑器当前词法器走（ND2 syncCurDocLexerToMenu），不按文件名反推，
+            // 否则手动切的语法会被每次选区刷新冲掉
+            StatusLang.Text = $"语法: {editor.LanguageDisplay.ToLowerInvariant()}";
             StatusModified.Text = _currentDocument.IsDirty ? "●" : "";
             StatusReadonly.Text = _currentDocument.IsReadOnly
                 ? (_currentDocument.IsHexView ? "十六进制" : "只读")

@@ -42,8 +42,21 @@ public partial class EditorControl : WindowsFormsHost
 
     private readonly List<MarkRecord> _markRecords = new();
 
-    /// <summary>当前语言的注释前缀（由主窗口根据文件类型设置）</summary>
-    public string CommentPrefix { get; set; } = "//";
+    // 位置回退 / 前进双栈，照 ND2 的 m_prePosRecord / m_nextPosRecord：只有跨行才入栈，
+    // 上限 MAX_PRE_NEXT_TIMES=30，满了丢最旧的一条；仅内存，不落配置。
+    private const int MaxPreNextTimes = 30;
+    private readonly List<int> _prePosRecord = new();
+    private readonly List<int> _nextPosRecord = new();
+    private int _curPos = 0;                    // ND2 构造函数里 m_curPos(0)，所以文档刚建好时光标在 0 不会压栈
+    private int _lastTrackedLine = -1;          // 对齐 QsciScintilla 的 oldLine(-1)
+
+    /// <summary>
+    /// 当前语言的注释符号，跟着词法器一起下发（ND2 也是把这三个值挂在词法器实例上）。
+    /// 初值取「纯文本」那一档：ND2 新建文档挂的就是 QsciLexerText，行注释符是 #。
+    /// 全空 = 这门语言没有注释动作，<see cref="CommentOps"/> 会直接不动作。
+    /// </summary>
+    public LexerService.CommentSymbols CommentSymbols { get; private set; } =
+        LexerService.GetCommentSymbols("null", null);
 
     // Scintilla 标准折叠标记索引
     private const int SC_MARKNUM_FOLDEREND = 25;
@@ -85,10 +98,13 @@ public partial class EditorControl : WindowsFormsHost
     private void SetupEditor()
     {
         // ===== 基本设置 =====
+        // ND2 出厂是 WrapNone + 缩进参考线关（键 warp / indent 默认都 0），勾不勾都由视图菜单与配置决定
         _scintilla.WrapMode = ScintillaNET.WrapMode.None;
-        _scintilla.IndentationGuides = IndentView.LookBoth;
-        _scintilla.TabWidth = 4;
-        _scintilla.UseTabs = false;
+        _scintilla.IndentationGuides = IndentView.None;
+        // ND2 在 ScintillaEditView 构造里按平台钉死换行符格式（scintillaeditview.cpp:1139-1145），
+        // 紧跟着就是 setAutoIndent(true)；不设的话回车会插入单个 CR，和 ND2 不一致
+        _scintilla.EolMode = Eol.CrLf;
+        ApplyTabSettings();
         _scintilla.CaretWidth = 2;
 
         // ===== 边距设置 =====
@@ -161,7 +177,13 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.MouseWheel += OnMouseWheel;
 
         // 编辑区是 Win32 子 HWND，点击不会走 WPF 输入管线，主窗口只能靠这个通知补一次抬层
-        _scintilla.MouseDown += (_, _) => EditorMouseDown?.Invoke();
+        _scintilla.MouseDown += (_, e) =>
+        {
+            EditorMouseDown?.Invoke();
+            // ND2 在 mouseDoubleClickEvent 里先判 URL 热点（:2639），命中就直接开浏览器；
+            // WinForms 的第二次按下走的是同一条消息，Clicks==2 就是它
+            if (e.Button == MouseButtons.Left && e.Clicks == 2) OnEditorDoubleClick();
+        };
 
         // ===== 事件 =====
         _scintilla.MarginClick += OnMarginClick;
@@ -172,6 +194,18 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.SavePointLeft += OnSavePointLeft;
         _scintilla.SavePointReached += OnSavePointReached;
         _scintilla.KeyDown += OnScintillaKeyDown;
+        _scintilla.CharAdded += OnCharAdded;
+    }
+
+    /// <summary>
+    /// 把全局 Tab 设置写进本编辑器（ND2 scintillaeditview.cpp:1055-1058：
+    /// SCI_SETTABWIDTH(s_tabLens) 与 setIndentationsUseTabs(!s_noUseTab)）
+    /// </summary>
+    public void ApplyTabSettings()
+    {
+        var s = SettingsService.Current;
+        _scintilla.TabWidth = s.TabWidth;
+        _scintilla.UseTabs = !s.ReplaceTabWithSpace;
     }
 
     /// <summary>编辑器内按下的快捷键（命令名），由主窗口处理</summary>
@@ -206,11 +240,22 @@ public partial class EditorControl : WindowsFormsHost
         else if (e.Control && e.KeyCode == Keys.G) cmd = "gotoline";
         else if (e.Control && e.KeyCode == Keys.W) cmd = "closefile";
         else if (e.Control && e.KeyCode == Keys.T) cmd = "theme";
-        else if (e.Control && (e.KeyCode == Keys.OemQuestion || e.KeyCode == Keys.Oem2)) cmd = "comment";
+        // ND2 的三条注释快捷键（shortcutkeymgr.cpp:112-114），焦点在编辑器时由这里转给主窗口
+        else if (e.Control && e.Shift && e.KeyCode == Keys.K) cmd = "cbkcom";
+        else if (e.Control && e.KeyCode == Keys.Q) cmd = "linecom";
+        else if (e.Control && e.KeyCode == Keys.K) cmd = "bkcom";
         else if (e.Control && (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)) cmd = "zoomin";
         else if (e.Control && (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)) cmd = "zoomout";
         else if (e.Control && (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0)) cmd = "zoomreset";
-        else if (e.KeyCode == Keys.F2) cmd = "bookmark";
+        // ND2「行编辑」在 .ui 里定义的四个快捷键，焦点在编辑器时也得照样走主窗口那套（只读判断在宿主侧）
+        else if (e.Control && !e.Alt && !e.Shift && e.KeyCode == Keys.D) cmd = "dupline";
+        else if (e.Control && e.Shift && e.KeyCode == Keys.Up) cmd = "movelineup";
+        else if (e.Control && e.Shift && e.KeyCode == Keys.Down) cmd = "movelinedown";
+        else if (e.Control && e.Alt && e.Shift && e.KeyCode == Keys.Return) cmd = "blankbelow";
+        else if (e.Control && e.Alt && e.KeyCode == Keys.Return) cmd = "blankabove";
+        else if (e.KeyCode == Keys.F2 && e.Control) cmd = "bookmark";            // ND2：Ctrl+F2 设置/取消
+        else if (e.KeyCode == Keys.F2 && e.Shift) cmd = "bookmarkprev";          // ND2：Shift+F2 上一书签
+        else if (e.KeyCode == Keys.F2) cmd = "bookmarknext";                     // ND2：F2 下一书签
         else if (e.KeyCode == Keys.F3 && e.Shift) cmd = "findprev";
         else if (e.KeyCode == Keys.F3) cmd = "findnext";
 
@@ -220,6 +265,61 @@ public partial class EditorControl : WindowsFormsHost
             e.Handled = true;
             e.SuppressKeyPress = true;
         }
+    }
+
+    // ==================== 回车自动缩进 ====================
+    // ND2 无条件 setAutoIndent(true)（scintillaeditview.cpp:1149），实现在 QScintilla：
+    // 字符已经插进缓冲区之后再处理，且只在「无选区、光标不在文档开头」时生效
+    // （qsciscintilla.cpp:245-284 handleCharAdded）。本仓库里没有任何词法器覆写
+    // blockStart/blockEnd/blockStartKeyword，autoIndentStyle() 恒为 AiMaintain，
+    // 所以所有语言走的都是 maintainIndentation 这一条路。
+
+    private void OnCharAdded(object? sender, CharAddedEventArgs e)
+    {
+        int pos = _scintilla.SelectionStart;
+        if (pos != _scintilla.SelectionEnd || pos == 0) return;
+        MaintainIndentation(e.Char, pos);
+    }
+
+    /// <summary>照抄 QsciScintilla::maintainIndentation：沿用最近一条非空行的缩进</summary>
+    private void MaintainIndentation(int ch, int pos)
+    {
+        if (ch != '\r' && ch != '\n') return;
+
+        int currLine = _scintilla.LineFromPosition(pos);
+
+        int ind = 0;
+        for (int line = currLine - 1; line >= 0; line--)
+        {
+            if (LineContentEndPos(line) > _scintilla.Lines[line].Position)
+            {
+                ind = _scintilla.Lines[line].Indentation;
+                break;
+            }
+        }
+
+        if (ind > 0) AutoIndentLine(pos, currLine, ind);
+    }
+
+    /// <summary>照抄 QsciScintilla::autoIndentLine：改缩进后把光标按同样的位移带过去</summary>
+    private void AutoIndentLine(int pos, int line, int indent)
+    {
+        var ln = _scintilla.Lines[line];
+        int posBefore = ln.IndentPosition;
+        ln.Indentation = indent;
+        int posAfter = ln.IndentPosition;
+
+        int newPos = -1;
+        if (posAfter > posBefore)
+        {
+            newPos = pos + (posAfter - posBefore);
+        }
+        else if (posAfter < posBefore && pos >= posAfter)
+        {
+            newPos = pos >= posBefore ? pos + (posAfter - posBefore) : posAfter;
+        }
+
+        if (newPos >= 0) _scintilla.SetSelection(newPos, newPos);
     }
 
     private ContextMenuStrip BuildContextMenu()
@@ -234,9 +334,13 @@ public partial class EditorControl : WindowsFormsHost
         menu.Items.Add("粘贴", null, (_, _) => _scintilla.Paste());
         menu.Items.Add("全选", null, (_, _) => _scintilla.SelectAll());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("切换注释", null, (_, _) => ToggleComment(CommentPrefix));
-        menu.Items.Add("转为大写", null, (_, _) => UpperCaseSelection());
-        menu.Items.Add("转为小写", null, (_, _) => LowerCaseSelection());
+        // ND2 contextUserDefineMenuEvent（scintillaeditview.cpp:1964-1972）追加的三条注释项，文案照 realcompare_zh.ts:7478-7489
+        menu.Items.Add("添加/删除当行注释", null, (_, _) => Comment(CommentAction.AddDelLineComment));
+        menu.Items.Add("区块注释", null, (_, _) => Comment(CommentAction.AddBlockComment));
+        menu.Items.Add("清除区块注释", null, (_, _) => Comment(CommentAction.DelBlockComment));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("转成大写", null, (_, _) => ChangeCase(CaseMode.Upper));
+        menu.Items.Add("转成小写", null, (_, _) => ChangeCase(CaseMode.Lower));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("切换书签", null, (_, _) =>
         {
@@ -297,8 +401,64 @@ public partial class EditorControl : WindowsFormsHost
 
     private void OnUpdateUI(object? sender, UpdateUIEventArgs e)
     {
+        TrackPosHistory();
+        // ND2 的 handleUpdateUI 顺序是 cursorPosChange → addHotSpot → braceMatch（qsciscintilla.cpp:3745-3766）
+        AddHotSpot();
         UpdateBraceMatch();
         CursorPositionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// 位置历史入栈：ND2 的 cursorPosChange 只在「 caret 变了且行号也变了」时才 emit
+    /// （qsciscintilla.cpp:3747-3760），所以同一行内横向移动不入栈；去重只看 m_curPos。
+    /// </summary>
+    private void TrackPosHistory()
+    {
+        int line = _scintilla.CurrentLine;
+        if (line == _lastTrackedLine) return;
+        _lastTrackedLine = line;
+
+        int pos = _scintilla.CurrentPosition;
+        if (pos == _curPos) return;
+
+        _prePosRecord.Add(pos);
+        if (_prePosRecord.Count >= MaxPreNextTimes) _prePosRecord.RemoveAt(0);
+    }
+
+    /// <summary>
+    /// 回退一个位置（ND2 gotoPrePos）：栈里至少 2 条才动——最后一条就是「现在站的地方」；
+    /// 弹顶塞进前进栈头部，再跳到新栈顶。返回 false 表示没有前一个位置了（调用方蜂鸣）。
+    /// </summary>
+    public bool GotoPrePos()
+    {
+        if (_prePosRecord.Count <= 1) return false;
+
+        int v = _prePosRecord[^1];
+        _prePosRecord.RemoveAt(_prePosRecord.Count - 1);
+        _nextPosRecord.Insert(0, v);
+        if (_nextPosRecord.Count >= MaxPreNextTimes) _nextPosRecord.RemoveAt(_nextPosRecord.Count - 1);
+
+        JumpToPos(_prePosRecord[^1]);
+        return true;
+    }
+
+    /// <summary>前进一个位置（ND2 gotoNextPos）：前进栈只逐条消耗，从不整体清空</summary>
+    public bool GotoNextPos()
+    {
+        if (_nextPosRecord.Count == 0) return false;
+
+        int pos = _nextPosRecord[0];
+        _nextPosRecord.RemoveAt(0);
+        _prePosRecord.Add(pos);
+        JumpToPos(pos);
+        return true;
+    }
+
+    // C# 里 UpdateUI 是同步回调，必须在移动光标之前先记下 _curPos，否则跳过去会被自己再压一次栈
+    private void JumpToPos(int pos)
+    {
+        _curPos = pos;
+        _scintilla.CurrentPosition = pos;       // SCI_GOTOPOS 自带把光标滚进可视区
     }
 
     /// <summary>
@@ -423,6 +583,13 @@ public partial class EditorControl : WindowsFormsHost
     /// <summary>当前词法器名称（自行记录，不依赖 Scintilla 的读回）</summary>
     public string CurrentLexerName { get; private set; } = "null";
 
+    /// <summary>
+    /// 状态栏「语法」栏要显示的语言名。ND2 显示的是当前词法器的 lexerTag（ccnotepad.cpp:7939
+    /// syncCurDocLexerToMenu），手动切语法后不会被选区刷新改回去；我们这边多个语言共用一个
+    /// Lexilla 词法器（cpp 同时服务 C#/Java/Go…），光看 CurrentLexerName 反推不出来，所以单独记。
+    /// </summary>
+    public string LanguageDisplay { get; set; } = "Text";
+
     /// <summary>按当前主题给编辑器上色</summary>
     public void ApplyTheme()
     {
@@ -434,6 +601,7 @@ public partial class EditorControl : WindowsFormsHost
         if (!_scintilla.IsHandleCreated || _pendingFilePath == null) return;
 
         SetLexerByNameInternal(LexerService.GetLexerName(_pendingFilePath), _pendingFilePath);
+        LanguageDisplay = LexerService.GetLanguageName(_pendingFilePath);
         ApplyTheme();
         RestyleNow();
     }
@@ -465,6 +633,9 @@ public partial class EditorControl : WindowsFormsHost
         }
         CurrentLexerName = installed ? lexerName : "null";
 
+        // 注释符号跟着「真正生效的那个词法器」走，和 ND2 把符号挂在词法器实例上同一个口径
+        CommentSymbols = LexerService.GetCommentSymbols(CurrentLexerName, keywordPath);
+
         // 注入关键字表（cpp 这类词法器不带 C#/JS/Go 等语言的关键字，不注入则关键字不上色）
         if (keywordPath != null)
         {
@@ -482,6 +653,9 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.SetProperty("fold.compact", "1");
         _scintilla.SetProperty("fold.html", "1");
         _scintilla.SetProperty("fold.hypertext.comment", "1");
+
+        // 词法器换了，缩进参考线的模式可能跟着换（Python 那一档不一样），补一次
+        ApplyIndentGuide();
     }
 
     /// <summary>下发词法器并读回校验：以控件里真正生效的那个为准</summary>
@@ -530,7 +704,7 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.ScrollCaret();
     }
 
-    /// <summary>选中某行内以「字符」为单位的区间；Scintilla 位置是 UTF-8 字节偏移，需换算</summary>
+    /// <summary>选中某行内以「字符」为单位的区间；托管位置本来就是 UTF-16 码元，直接相加即可</summary>
     public void SelectInLine(int lineIndex, int charColumn, int charLength)
     {
         if (lineIndex < 0 || lineIndex >= _scintilla.Lines.Count) return;
@@ -538,8 +712,8 @@ public partial class EditorControl : WindowsFormsHost
 
         int column = Math.Clamp(charColumn, 0, body.Length);
         int length = Math.Clamp(charLength, 0, body.Length - column);
-        int start = LineStartPos(lineIndex) + System.Text.Encoding.UTF8.GetByteCount(body[..column]);
-        int end = start + System.Text.Encoding.UTF8.GetByteCount(body.Substring(column, length));
+        int start = LineStartPos(lineIndex) + column;
+        int end = start + length;
 
         // SetSelection 的 caret 参数已经是 end，再调 GotoPosition 会把选区压扁
         _scintilla.SetSelection(start, end);
@@ -863,57 +1037,6 @@ public partial class EditorControl : WindowsFormsHost
         try { _scintilla.Paste(); } catch { }
     }
 
-    // ==================== 大小写 / 注释 ====================
-
-    public void UpperCaseSelection()
-    {
-        string text = _scintilla.SelectedText;
-        if (string.IsNullOrEmpty(text)) return;
-        _scintilla.TargetStart = _scintilla.SelectionStart;
-        _scintilla.TargetEnd = _scintilla.SelectionEnd;
-        _scintilla.ReplaceTarget(text.ToUpperInvariant());
-    }
-
-    public void LowerCaseSelection()
-    {
-        string text = _scintilla.SelectedText;
-        if (string.IsNullOrEmpty(text)) return;
-        _scintilla.TargetStart = _scintilla.SelectionStart;
-        _scintilla.TargetEnd = _scintilla.SelectionEnd;
-        _scintilla.ReplaceTarget(text.ToLowerInvariant());
-    }
-
-    /// <summary>
-    /// 切换当前行注释
-    /// </summary>
-    public void ToggleComment(string commentPrefix)
-    {
-        if (string.IsNullOrEmpty(commentPrefix)) return;
-
-        int line = CurrentLine;
-        var ln = _scintilla.Lines[line];
-        string text = ln.Text ?? string.Empty;
-
-        if (text.TrimStart().StartsWith(commentPrefix, StringComparison.Ordinal))
-        {
-            // 取消注释
-            int idx = text.IndexOf(commentPrefix, StringComparison.Ordinal);
-            string newText = text.Remove(idx, commentPrefix.Length);
-            if (newText.StartsWith(" ", StringComparison.Ordinal))
-                newText = newText.Substring(1);
-
-            _scintilla.TargetStart = ln.Position;
-            _scintilla.TargetEnd = ln.Position + ln.Length;
-            _scintilla.ReplaceTarget(newText);
-        }
-        else
-        {
-            // 加注释
-            int indent = text.Length - text.TrimStart().Length;
-            _scintilla.InsertText(ln.Position + indent, commentPrefix + " ");
-        }
-    }
-
     // ==================== 缩放 ====================
 
     public event EventHandler<int>? ZoomChanged;
@@ -937,22 +1060,29 @@ public partial class EditorControl : WindowsFormsHost
 
     // ==================== 显示选项 ====================
 
-    public bool ShowWhitespace
+    /// <summary>
+    /// ND2 的 blank 位域（ccnotepad.cpp:1059-1081 setEditShowBlankStatus）：
+    /// 0 全关 / 1 只空格 / 2 只行尾 / 3 都开。空格走的是 WsVisible（一直可见），不是「缩进之后才显示」。
+    /// </summary>
+    public int BlankShow
     {
-        get => _scintilla.ViewWhitespace != WhitespaceMode.Invisible;
-        set => _scintilla.ViewWhitespace = value ? WhitespaceMode.VisibleAlways : WhitespaceMode.Invisible;
+        get => (_scintilla.ViewWhitespace != WhitespaceMode.Invisible ? 1 : 0)
+             | (_scintilla.ViewEol ? 2 : 0);
+        set
+        {
+            _scintilla.ViewWhitespace = (value & 1) != 0 ? WhitespaceMode.VisibleAlways : WhitespaceMode.Invisible;
+            _scintilla.ViewEol = (value & 2) != 0;
+        }
     }
 
-    public bool ShowEol
-    {
-        get => _scintilla.ViewEol;
-        set => _scintilla.ViewEol = value;
-    }
-
+    /// <summary>
+    /// 自动换行。ND2 用的是 WrapCharacter（SCI_SETWRAPMODE = SC_WRAP_CHAR，按字符断），
+    /// 不是按单词断 —— 长串无空格的文本也会断开，这里照它。
+    /// </summary>
     public bool WordWrap
     {
         get => _scintilla.WrapMode != ScintillaNET.WrapMode.None;
-        set => _scintilla.WrapMode = value ? ScintillaNET.WrapMode.Word : ScintillaNET.WrapMode.None;
+        set => _scintilla.WrapMode = value ? ScintillaNET.WrapMode.Char : ScintillaNET.WrapMode.None;
     }
 
     /// <summary>当前行尾符名称</summary>
@@ -963,10 +1093,26 @@ public partial class EditorControl : WindowsFormsHost
         _ => "Unix(LF)",
     };
 
+    private bool _indentGuide;
+
+    /// <summary>
+    /// 缩进参考线，照 ND2 ScintillaEditView::setIndentGuide（scintillaeditview.cpp:990-1001）：
+    /// Python 用 LOOKFORWARD，其余语言用 LOOKBOTH，关掉是 NONE。
+    /// ND2 换词法器会把这一项冲掉（ccnotepad.cpp:4313 的注释就是为这个才把缩进线放到装词法器之后），
+    /// 所以我们也在装完词法器之后补一次。
+    /// </summary>
     public bool ShowIndentGuides
     {
-        get => _scintilla.IndentationGuides != IndentView.None;
-        set => _scintilla.IndentationGuides = value ? IndentView.LookBoth : IndentView.None;
+        get => _indentGuide;
+        set { _indentGuide = value; ApplyIndentGuide(); }
+    }
+
+    private void ApplyIndentGuide()
+    {
+        if (!CurrentLexerName.Equals("python", StringComparison.OrdinalIgnoreCase))
+            _scintilla.IndentationGuides = _indentGuide ? IndentView.LookBoth : IndentView.None;
+        else
+            _scintilla.IndentationGuides = _indentGuide ? IndentView.LookForward : IndentView.None;
     }
 
     // ==================== 字体 ====================

@@ -13,21 +13,45 @@ public class AppSettings
     public string Theme { get; set; } = "Light";
     public string FontFamily { get; set; } = "Consolas";
     public double FontSize { get; set; } = 10;
+
+    /// <summary>自动换行（ND2 键 warp，存的是 WrapCharacter/WrapNone，默认 0=不换行）</summary>
     public bool WordWrap { get; set; }
-    public bool ShowWhitespace { get; set; }
-    public bool ShowEol { get; set; }
-    public bool ShowIndentGuide { get; set; } = true;
+
+    /// <summary>
+    /// 显示符号位域（ND2 键 blank：<c>ccnotepad.cpp:1059-1081</c>）：
+    /// 1=显示空格 2=显示行尾 3=都显示 0=都不显示，出厂默认 0。
+    /// 视图菜单的三项互锁走的就是这一位，不是两个独立开关。
+    /// </summary>
+    public int BlankShow { get; set; }
+
+    /// <summary>缩进参考线（ND2 键 indent，工具栏按钮，默认 0=关）</summary>
+    public bool ShowIndentGuide { get; set; }
+
     public bool CaretLineHighlight { get; set; } = true;
     public bool AutoEolDetect { get; set; } = true;
+
+    /// <summary>显示工具栏（ND2 键 showbar，默认 1）</summary>
     public bool ShowToolBar { get; set; } = true;
+
+    /// <summary>
+    /// 高亮网页地址、双击打开（ND2 键 showweb，默认 0=关，菜单文案自己标了「不推荐开启」）。
+    /// ND2 只在启动时读一次，切换时只改内存里那个静态位 + 落盘，不刷新已经画出来的热点。
+    /// </summary>
+    public bool ShowWebAddr { get; set; }
+
+    /// <summary>Tab 宽度（ND2 键 tablens：对话框 spinbox 限 0-16，出厂种子 4）</summary>
+    public int TabWidth { get; set; } = 4;
+
+    /// <summary>
+    /// 用空格替换 TAB 缩进（ND2 键 tabnouse：1=用空格、0=用 TAB）。
+    /// ND2 出厂种子是 0，也就是默认仍然打真 TAB，这里照抄；界面文案沿用 ND2 的「使用空格替换tab」。
+    /// </summary>
+    public bool ReplaceTabWithSpace { get; set; }
 
     /// <summary>超过该大小（MB）的文件在打开前提示</summary>
     public int BigFileThresholdMb { get; set; } = 100;
 
     public bool WatchExternalChanges { get; set; } = true;
-
-    /// <summary>空格/制表符互转时只处理行首</summary>
-    public bool TabLeadingOnly { get; set; }
 
     /// <summary>列编辑器上一次的参数，省得每次重新填</summary>
     public string ColumnEditorLastUsed { get; set; } = string.Empty;

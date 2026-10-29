@@ -190,9 +190,10 @@
                 <Separator/>
                 <MenuItem Header="全选" Command="{Binding SelectAllCommand}" InputGestureText="Ctrl+A"/>
                 <Separator/>
-                <MenuItem Header="切换行注释" Command="{Binding ToggleCommentCommand}" InputGestureText="Ctrl+/"/>
-                <MenuItem Header="转换为大写" Command="{Binding UpperCaseCommand}"/>
-                <MenuItem Header="转换为小写" Command="{Binding LowerCaseCommand}"/>
+                <!-- ND2 的注释三件套只挂在编辑器右键菜单上（scintillaeditview.cpp:1964-1972），这里按同样三条、同样快捷键 -->
+                <MenuItem Header="添加/删除当行注释" Command="{Binding LineCommentCommand}" InputGestureText="Ctrl+Q"/>
+                <MenuItem Header="区块注释" Command="{Binding AddBlockCommentCommand}" InputGestureText="Ctrl+K"/>
+                <MenuItem Header="清除区块注释" Command="{Binding DelBlockCommentCommand}" InputGestureText="Ctrl+Shift+K"/>
             </MenuItem>
 
             <MenuItem Header="查找(_S)">
@@ -212,24 +213,49 @@
                 <MenuItem Header="批量查找替换…" Click="OnBatchFind" InputGestureText="Ctrl+Alt+K"/>
                 <Separator/>
                 <MenuItem Header="转到行..." Command="{Binding GoToLineCommand}" InputGestureText="Ctrl+G"/>
+                <Separator/>
+                <!-- ND2 的「书签」子菜单就挂在查找下面，10 项、快捷键 Ctrl+F2 / F2 / Shift+F2 -->
+                <MenuItem Header="书签(_B)">
+                    <MenuItem Header="设置/取消书签" Command="{Binding ToggleBookmarkCommand}" InputGestureText="Ctrl+F2"/>
+                    <MenuItem Header="下一书签" Command="{Binding NextBookmarkCommand}" InputGestureText="F2"/>
+                    <MenuItem Header="上一书签" Command="{Binding PreviousBookmarkCommand}" InputGestureText="Shift+F2"/>
+                    <MenuItem Header="清除所有书签" Command="{Binding ClearBookmarksCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="剪切书签行" Command="{Binding CutMarkedLinesCommand}"/>
+                    <MenuItem Header="复制书签行" Command="{Binding CopyMarkedLinesCommand}"/>
+                    <MenuItem Header="粘贴(替换)书签行" Command="{Binding PasteMarkedLinesCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="删除书签行" Command="{Binding DeleteMarkedLinesCommand}"/>
+                    <MenuItem Header="删除未标记行" Command="{Binding DeleteUnmarkedLinesCommand}"/>
+                    <MenuItem Header="反向标记书签" Command="{Binding InvertMarksCommand}"/>
+                </MenuItem>
+                <!-- ND2 的「标记颜色」子菜单：单选 5 个色槽，选完立刻用这个色重标光标处的词 -->
+                <MenuItem Header="标记颜色(_C)" x:Name="MarkColorMenu"/>
             </MenuItem>
 
             <MenuItem Header="格式(_A)" x:Name="FormatMenu"/>
 
             <MenuItem Header="视图(_V)">
+                <!-- 这一段照 ND2 视图菜单（ccnotepad.ui:211-238）：显示符号(三态互锁) → 自动换行 → 文件列表窗口 → 显示工具栏 → 显示网站；
+                     「显示缩进参考线」ND2 只在工具栏上放按钮，这里多给一个菜单入口（刻意偏离，好让开关不依赖工具栏可见） -->
+                <MenuItem Header="显示符号(_S)">
+                    <MenuItem Header="显示空格" IsCheckable="True" x:Name="MenuShowSpaces" Command="{Binding ToggleSpacesCommand}"/>
+                    <MenuItem Header="显示行尾" IsCheckable="True" x:Name="MenuShowLineEnd" Command="{Binding ToggleLineEndCommand}"/>
+                    <MenuItem Header="显示所有" IsCheckable="True" x:Name="MenuShowAllWhite" Command="{Binding ToggleAllWhiteCommand}"/>
+                </MenuItem>
+                <MenuItem Header="自动换行" IsCheckable="True" x:Name="MenuWordWrap" Command="{Binding ToggleWordWrapCommand}"/>
+                <MenuItem Header="显示缩进参考线" IsCheckable="True" x:Name="MenuIndentGuide" Command="{Binding ToggleIndentGuideCommand}"/>
+                <MenuItem Header="文件列表窗口" IsCheckable="True" x:Name="MenuFileListView" Command="{Binding ToggleFileTreeCommand}"/>
+                <MenuItem Header="显示工具栏" IsCheckable="True" x:Name="MenuShowToolBar" Command="{Binding ToggleToolBarCommand}"/>
+                <MenuItem Header="显示网站（不推荐开启）" IsCheckable="True" x:Name="MenuShowWebAddr" Command="{Binding ToggleWebAddrCommand}"/>
+                <Separator/>
                 <MenuItem Header="折叠所有" Command="{Binding CollapseAllCommand}"/>
                 <MenuItem Header="展开所有" Command="{Binding ExpandAllCommand}"/>
-                <Separator/>
-                <MenuItem Header="自动换行" IsCheckable="True" x:Name="MenuWordWrap" Command="{Binding ToggleWordWrapCommand}"/>
-                <MenuItem Header="显示空白字符" IsCheckable="True" x:Name="MenuWhitespace" Command="{Binding ToggleWhitespaceCommand}"/>
-                <MenuItem Header="显示行尾符" IsCheckable="True" x:Name="MenuEol" Command="{Binding ToggleEolCommand}"/>
-                <MenuItem Header="显示缩进参考线" IsCheckable="True" x:Name="MenuIndentGuide" Command="{Binding ToggleIndentGuideCommand}"/>
                 <Separator/>
                 <MenuItem Header="放大字号" Command="{Binding ZoomInCommand}" InputGestureText="Ctrl+="/>
                 <MenuItem Header="缩小字号" Command="{Binding ZoomOutCommand}" InputGestureText="Ctrl+-"/>
                 <MenuItem Header="重置字号" Command="{Binding ZoomResetCommand}" InputGestureText="Ctrl+0"/>
                 <Separator/>
-                <MenuItem Header="文件列表" Command="{Binding ToggleFileTreeCommand}"/>
                 <MenuItem Header="书签列表" Command="{Binding ToggleBookmarkBarCommand}"/>
                 <MenuItem Header="Markdown 预览" Command="{Binding ToggleMarkdownCommand}"/>
                 <Separator/>
@@ -261,6 +287,9 @@
                 <MenuItem Header="亮色主题" Command="{Binding LightThemeCommand}"/>
                 <MenuItem Header="暗色主题" Command="{Binding DarkThemeCommand}"/>
                 <Separator/>
+                <!-- ND2 的 Tab 设置藏在 选项 → 文本和字体 里（texteditsetwin.ui），这里拉平一层 -->
+                <MenuItem Header="Tab 设置…" Click="OnTabSettings"/>
+                <Separator/>
                 <MenuItem Header="打开设置目录" Command="{Binding OpenSettingsFolderCommand}"/>
             </MenuItem>
 
@@ -280,9 +309,7 @@
 
             <MenuItem Header="工具(_O)">
                 <MenuItem Header="显示/隐藏 文件列表" Command="{Binding ToggleFileTreeCommand}"/>
-                <MenuItem Header="显示/隐藏 书签列表" Command="{Binding ToggleBookmarkBarCommand}"/>
                 <Separator/>
-                <MenuItem Header="清除所有书签" Command="{Binding ClearBookmarksCommand}"/>
                 <MenuItem Header="全部标记书签" Command="{Binding MarkAllCommand}"/>
                 <MenuItem Header="清除查找高亮" Command="{Binding ClearHighlightCommand}"/>
                 <Separator/>
@@ -308,7 +335,7 @@
         </Menu>
 
         <!-- ==================== 主工具栏 ==================== -->
-        <Border DockPanel.Dock="Top" Background="{DynamicResource PanelBackground}"
+        <Border x:Name="MainToolBar" DockPanel.Dock="Top" Background="{DynamicResource PanelBackground}"
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
           <Grid>
             <Grid.ColumnDefinitions>
@@ -369,25 +396,38 @@
                 <Border Style="{DynamicResource ToolSeparator}"/>
 
                 <!-- 书签 / 导航组 -->
-                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleBookmarkCommand}" ToolTip="切换书签 (F2)">
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleBookmarkCommand}" ToolTip="设置/取消书签 (Ctrl+F2)">
                     <Image Source="Resources/Icons/mark.png" Width="16" Height="16"/>
                 </Button>
-                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding NextBookmarkCommand}" ToolTip="下一个书签">
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding NextBookmarkCommand}" ToolTip="下一书签 (F2)">
                     <Image Source="Resources/Icons/pre.png" Width="16" Height="16"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding PreviousBookmarkCommand}" ToolTip="上一书签 (Shift+F2)">
+                    <Image Source="Resources/Icons/pre1.png" Width="16" Height="16"/>
                 </Button>
                 <Button Style="{DynamicResource ToolIconButton}" Command="{Binding GoToLineCommand}" ToolTip="转到行 (Ctrl+G)">
                     <Image Source="Resources/Icons/go.png" Width="16" Height="16"/>
                 </Button>
+                <!-- 位置回退/前进：ND2 的 tooltip 就是「上一页/位置」「下一页/位置」，
+                     同一对按钮在十六进制标签上走翻页、在文本标签上走位置回退（ccnotepad.cpp:7969-8040） -->
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding PrePosCommand}" ToolTip="上一页/位置">
+                    <Path Data="M 3,2 H 5 V 14 H 3 Z M 12,2 L 12,14 L 6,8 Z"
+                          Fill="{DynamicResource TextBrush}" Width="14" Height="14" Stretch="Uniform"/>
+                </Button>
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding NextPosCommand}" ToolTip="下一页/位置">
+                    <Path Data="M 4,2 L 4,14 L 10,8 Z M 11,2 H 13 V 14 H 11 Z"
+                          Fill="{DynamicResource TextBrush}" Width="14" Height="14" Stretch="Uniform"/>
+                </Button>
                 <Border Style="{DynamicResource ToolSeparator}"/>
 
-                <!-- 视图组 -->
+                <!-- 视图组：工具栏这个空白按钮对应 ND2 的 m_allWhite，点的就是「显示所有」（ccnotepad.cpp:6760） -->
                 <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleWordWrapCommand}" ToolTip="自动换行">
                     <Image Source="Resources/Icons/wrap.png" Width="16" Height="16"/>
                 </Button>
-                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleWhitespaceCommand}" ToolTip="显示空白字符">
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleAllWhiteCommand}" ToolTip="显示所有">
                     <Image Source="Resources/Icons/invisibleChar.png" Width="16" Height="16"/>
                 </Button>
-                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleIndentGuideCommand}" ToolTip="显示缩进参考线">
+                <Button Style="{DynamicResource ToolIconButton}" Command="{Binding ToggleIndentGuideCommand}" ToolTip="缩进参考线">
                     <Image Source="Resources/Icons/indentGuide.png" Width="16" Height="16"/>
                 </Button>
                 <Border Style="{DynamicResource ToolSeparator}"/>
@@ -591,15 +631,15 @@
                     <MenuItem Header="查找/替换 (_F)" Command="{Binding FindCommand}"/>
                     <MenuItem Header="查找下一个 (F3)" Command="{Binding FindNextCommand}"/>
                     <Separator/>
-                    <MenuItem Header="书签: 切换 (F2)" Command="{Binding ToggleBookmarkCommand}"/>
-                    <MenuItem Header="下一个书签" Command="{Binding NextBookmarkCommand}"/>
-                    <MenuItem Header="上一个书签" Command="{Binding PreviousBookmarkCommand}"/>
+                    <MenuItem Header="设置/取消书签 (Ctrl+F2)" Command="{Binding ToggleBookmarkCommand}"/>
+                    <MenuItem Header="下一书签 (F2)" Command="{Binding NextBookmarkCommand}"/>
+                    <MenuItem Header="上一书签 (Shift+F2)" Command="{Binding PreviousBookmarkCommand}"/>
                     <Separator/>
                     <MenuItem Header="折叠所有" Command="{Binding CollapseAllCommand}"/>
                     <MenuItem Header="展开所有" Command="{Binding ExpandAllCommand}"/>
                     <Separator/>
-                    <MenuItem Header="转换为大写" Command="{Binding UpperCaseCommand}"/>
-                    <MenuItem Header="转换为小写" Command="{Binding LowerCaseCommand}"/>
+                    <MenuItem Header="转成大写" Command="{Binding UpperCaseCommand}"/>
+                    <MenuItem Header="转成小写" Command="{Binding LowerCaseCommand}"/>
                     <Separator/>
                     <MenuItem Header="重新加载文件" Command="{Binding ReloadFileCommand}"/>
                     <MenuItem Header="打开所在文件夹" Command="{Binding OpenFolderCommand}"/>

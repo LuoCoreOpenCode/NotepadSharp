@@ -4,14 +4,18 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using NotepadSharp.Services;
 using ScintillaNET;
 
 namespace NotepadSharp.Controls;
 
 /// <summary>
 /// 编辑器行 / 列批量操作，对应「格式」菜单。
-/// 语义：有跨行选区时只处理选区内的行，
-/// 否则处理整个文档；批量改动都包在一个 undo action 内，可一次撤销。
+/// 作用域分三类，按 ND2 的原样：**行级整备**（排序 / 反排 / 去重）走 <see cref="CurrentLineScope"/>
+/// ——多光标只有矩形选区才处理且按列切片、单行选区不动作、无选区处理全文；
+/// **静默正则类**（移除空行 / 去除行首尾空白 / TAB 互转）永远无视选区处理整篇；
+/// 剩下标了「本地增强」的才用 <see cref="WorkLineRange"/>（有跨行选区只处理选区行，否则全文）。
+/// 批量改动都包在一个 undo action 内，可一次撤销。
 /// </summary>
 public partial class EditorControl
 {
@@ -72,11 +76,28 @@ public partial class EditorControl
         return (Math.Min(anchorLine, caretLine), Math.Max(anchorLine, caretLine));
     }
 
+    /// <summary>行起点（SCI_POSITIONFROMLINE）</summary>
     private int LineStartPos(int line) => _scintilla.Lines[line].Position;
 
     /// <summary>行尾位置（含该行换行符，等于下一行起始）</summary>
     private int LineEndPos(int line)
         => line + 1 < _scintilla.Lines.Count ? _scintilla.Lines[line + 1].Position : _scintilla.TextLength;
+
+    /// <summary>
+    /// 本行内容末尾，不含行尾符（SCI_GETLINEENDPOSITION）。
+    /// ScintillaNET 的 Line.EndPosition 是 Position+Length、长度里带行尾符，直接用会多吃掉一个换行。
+    /// 这里的下标都是托管 API 的 UTF-16 码元位（ScintillaNET 内部再换算成 UTF-8 字节），
+    /// 别再套 GetByteCount，否则行里有中文就会多推几个位置。
+    /// </summary>
+    private int LineContentEndPos(int line)
+    {
+        int start = LineStartPos(line);
+        string text = _scintilla.GetTextRange(start, LineEndPos(line) - start);
+        int cut = text.Length;
+        if (cut > 0 && text[cut - 1] == '\n') cut--;
+        if (cut > 0 && text[cut - 1] == '\r') cut--;
+        return start + cut;
+    }
 
     /// <summary>整行文本（不含换行符）</summary>
     private string LineBody(int line)
@@ -134,36 +155,161 @@ public partial class EditorControl
         WithUndoGroup(() => SetLineRange(first, last, result));
     }
 
+    // ==================== ND2 行操作作用域（dealLineSort / removeAnyDuplicateLines） ====================
+
+    /// <summary>
+    /// ND2 这类整段行操作的作用域，逐条照 <c>dealLineSort</c>（ccnotepad.cpp:9589）：
+    /// 多光标只有矩形选区才处理并且按列切片，非矩形直接不动作；
+    /// 普通选区必须跨行（单行选区 return），无选区才处理全文。
+    /// </summary>
+    private readonly record struct LineScope(bool Ok, bool HasSelection, int FromLine, int ToLine, int FromColumn, int ToColumn);
+
+    private LineScope CurrentLineScope()
+    {
+        if (_scintilla.Selections.Count > 1)
+        {
+            if (!IsRectangleSelection) return new LineScope(false, false, 0, 0, 0, 0);
+
+            int anchor = _scintilla.RectangularSelectionAnchor;
+            int caret = _scintilla.RectangularSelectionCaret;
+            int anchorLine = _scintilla.LineFromPosition(anchor);
+            int caretLine = _scintilla.LineFromPosition(caret);
+            int anchorOffset = anchor - LineStartPos(anchorLine) + _scintilla.RectangularSelectionAnchorVirtualSpace;
+            int caretOffset = caret - LineStartPos(caretLine) + _scintilla.RectangularSelectionCaretVirtualSpace;
+
+            return new LineScope(true, false,
+                Math.Min(anchorLine, caretLine), Math.Max(anchorLine, caretLine),
+                Math.Min(anchorOffset, caretOffset), Math.Max(anchorOffset, caretOffset));
+        }
+
+        int selStart = _scintilla.SelectionStart;
+        int selEnd = _scintilla.SelectionEnd;
+        if (selStart != selEnd)
+        {
+            var (first, last) = SelectionLinesRange();
+            if (first == last) return new LineScope(false, true, 0, 0, 0, 0);   // One single line selection is not allowed.
+            return new LineScope(true, true, first, last, 0, 0);
+        }
+
+        return new LineScope(true, false, 0, _scintilla.Lines.Count - 1, 0, 0);
+    }
+
+    /// <summary>SCI_SELECTIONISRECTANGLE。ScintillaNET 没有把它包成属性，只能走 DirectMessage</summary>
+    private bool IsRectangleSelection
+        => _scintilla.DirectMessage(2372, IntPtr.Zero, IntPtr.Zero).ToInt64() != 0;
+
+    /// <summary>ND2 getSelectionLinesRange：选区尾正好落在下一行行首时，不算进下一行</summary>
+    private (int First, int Last) SelectionLinesRange()
+    {
+        int line1 = _scintilla.LineFromPosition(_scintilla.SelectionStart);
+        int line2 = _scintilla.LineFromPosition(_scintilla.SelectionEnd);
+        if (line1 != line2 && LineStartPos(line2) == _scintilla.SelectionEnd) line2--;
+        return (line1, line2);
+    }
+
+    /// <summary>
+    /// ND2 的 sortLines 与 removeAnyDuplicateLines 是同一条管线（scintillaeditview.cpp:2932/3051）：
+    /// 按文档行尾符切段 → 变换 → 拼回，整篇时不补尾行、选区段要把被 split 吃掉的最后一个空段还回去。
+    /// </summary>
+    private void RewriteLineScope(LineScope scope, Func<List<string>, List<string>> transform)
+    {
+        if (!scope.Ok || scope.FromLine >= scope.ToLine) return;
+
+        int startPos = LineStartPos(scope.FromLine);
+        int endPos = LineEndPos(scope.ToLine);
+        string text = _scintilla.GetTextRange(startPos, endPos - startPos);
+        string eol = EolString;
+
+        var lines = new List<string>(text.Split(new[] { eol }, StringSplitOptions.None));
+        bool entireDocument = scope.ToLine == _scintilla.Lines.Count - 1;
+        if (!entireDocument && lines.Count > 0 && lines[^1].Length == 0)
+        {
+            // 选区末尾的 EOL 被 split 成了空段，它其实属于上一行；补回去会多出一行，先摘掉
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        var result = transform(lines);
+
+        string joined = string.Join(eol, result);
+        if (!entireDocument) joined += eol;
+        if (text == joined) return;
+
+        WithUndoGroup(() =>
+        {
+            _scintilla.TargetStart = startPos;
+            _scintilla.TargetEnd = endPos;
+            _scintilla.ReplaceTarget(joined);
+        });
+
+        if (scope.HasSelection)
+        {
+            // ND2 排完把选区恢复成处理过的那几行
+            _scintilla.SetSelection(LineStartPos(scope.FromLine), LineContentEndPos(scope.ToLine));
+        }
+    }
+
+    /// <summary>ND2 ISorter::getSortKey：toColumn!=0 时只有这一段列宽参与比较</summary>
+    private static string SortKey(string line, int fromColumn, int toColumn)
+    {
+        if (toColumn == 0) return line;
+        if (line.Length < fromColumn) return string.Empty;
+        if (fromColumn == toColumn) return line[fromColumn..];
+        return line.Substring(fromColumn, toColumn - fromColumn);
+    }
+
+    /// <summary>compare 为 null 时就是 ND2 的 ReverseSorter（std::reverse，列切片对它没意义）</summary>
+    private void SortLinesNd(Comparison<string>? compare)
+    {
+        var scope = CurrentLineScope();
+        RewriteLineScope(scope, lines =>
+        {
+            if (compare == null) lines.Reverse();
+            else lines.Sort((a, b) => compare(SortKey(a, scope.FromColumn, scope.ToColumn),
+                                               SortKey(b, scope.FromColumn, scope.ToColumn)));
+            return lines;
+        });
+    }
+
     // ==================== 排序 ====================
 
     public enum SortMode
     {
         LexAsc, LexDesc,
         LexAscIgnoreCase, LexDescIgnoreCase,
+        ReverseOrder,
         IntegerAsc, IntegerDesc,
         DecimalDotAsc, DecimalDotDesc,
         DecimalCommaAsc, DecimalCommaDesc,
-        ReverseOrder, Randomize,
+        Randomize,
     }
 
     private static readonly Regex NumberPattern = new(@"[-+]?\d[\d.,]*", RegexOptions.Compiled);
 
     public void SortLines(SortMode mode)
     {
+        // 前五个是 ND2 行编辑里真实接线的排序项，走它自己的作用域管线
         switch (mode)
         {
             case SortMode.LexAsc:
-                TransformLines(l => l.OrderBy(x => x, StringComparer.Ordinal).ToList());
-                break;
+                SortLinesNd(string.CompareOrdinal);
+                return;
             case SortMode.LexDesc:
-                TransformLines(l => l.OrderByDescending(x => x, StringComparer.Ordinal).ToList());
-                break;
+                SortLinesNd((a, b) => -string.CompareOrdinal(a, b));
+                return;
             case SortMode.LexAscIgnoreCase:
-                TransformLines(l => l.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
-                break;
+                SortLinesNd((a, b) => string.Compare(a, b, StringComparison.OrdinalIgnoreCase));
+                return;
             case SortMode.LexDescIgnoreCase:
-                TransformLines(l => l.OrderByDescending(x => x, StringComparer.OrdinalIgnoreCase).ToList());
-                break;
+                SortLinesNd((a, b) => -string.Compare(a, b, StringComparison.OrdinalIgnoreCase));
+                return;
+            case SortMode.ReverseOrder:
+                SortLinesNd(null);
+                return;
+        }
+
+        // 以下都是 ND2 没接线的本地增强
+        switch (mode)
+        {
             case SortMode.IntegerAsc:
                 TransformLines(l => l.OrderBy(ExtractInteger).ToList());
                 break;
@@ -181,9 +327,6 @@ public partial class EditorControl
                 break;
             case SortMode.DecimalCommaDesc:
                 TransformLines(l => l.OrderByDescending(x => ExtractDecimal(x, ',')).ToList());
-                break;
-            case SortMode.ReverseOrder:
-                TransformLines(l => { l.Reverse(); return l; });
                 break;
             case SortMode.Randomize:
                 TransformLines(Shuffle);
@@ -233,34 +376,28 @@ public partial class EditorControl
 
     // ==================== 去重 / 空行 / 空白 ====================
 
-    public void RemoveConsecutiveDuplicateLines()
-        => TransformLines(l => l
-            .Select((line, idx) => new { line, idx })
-            .Where(x => x.idx == 0 || x.line != l[x.idx - 1])
-            .Select(x => x.line)
-            .ToList());
-
+    /// <summary>
+    /// ND2「删除重复行」= removeAnyDuplicateLines（scintillaeditview.cpp:2932）：
+    /// 整行原样比较（区分大小写、不 trim），保留首次出现；作用域和排序一样，单行选区直接不动作。
+    /// </summary>
     public void RemoveDuplicateLines()
-        => TransformLines(l =>
+    {
+        var scope = CurrentLineScope();
+        RewriteLineScope(scope, lines =>
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            return l.Where(seen.Add).ToList();
+            return lines.Where(seen.Add).ToList();
         });
+    }
 
-    /// <summary>去重并排序（「删除重复行」的另一变体）</summary>
-    public void RemoveDuplicateLinesSorted()
-        => TransformLines(l =>
-        {
-            var sorted = l.OrderBy(x => x, StringComparer.Ordinal).ToList();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            return sorted.Where(seen.Add).ToList();
-        });
+    /// <summary>
+    /// ND2「移除空行」/「移除空行(包括空白字符)」（ccnotepad.cpp:9137/9143 → findwin.cpp:916）：
+    /// 静默调用替换所有的正则引擎，无视选区处理整篇，返回替换次数好让宿主照 ND2 那样报状态栏。
+    /// </summary>
+    public int RemoveEmptyLines(bool containingBlankChars)
+        => SilentRegexReplaceAll(containingBlankChars ? @"^[\t ]*$(\r\n|\r|\n)" : @"^$(\r\n|\r|\n)");
 
-    /// <summary>删除所有空行</summary>
-    public void RemoveEmptyLines()
-        => TransformLines(l => l.Where(x => x.Trim().Length != 0).ToList());
-
-    /// <summary>连续空行折叠成一行</summary>
+    /// <summary>连续空行压成一行（ND2 没有这一项，本地增强）</summary>
     public void RemoveConsecutiveEmptyLines()
         => TransformLines(l =>
         {
@@ -276,7 +413,7 @@ public partial class EditorControl
             return result;
         });
 
-    /// <summary>删除文档首尾的空行</summary>
+    /// <summary>删除文档首尾的空行（ND2 没有这一项，本地增强）</summary>
     public void RemoveHeadEndEmptyLines()
         => TransformLines(l =>
         {
@@ -286,68 +423,81 @@ public partial class EditorControl
             return l.GetRange(first, Math.Max(0, last - first + 1));
         });
 
-    /// <summary>删除行首空白</summary>
-    public void RemoveLeadingSpace()
-        => TransformLines(l => l.Select(x => x.TrimStart()).ToList());
+    /// <summary>以下三条是 ND2 的死控件（连续去重 / 去重后排序），保留为本地增强</summary>
+    public void RemoveConsecutiveDuplicateLines()
+        => TransformLines(l => l
+            .Select((line, idx) => new { line, idx })
+            .Where(x => x.idx == 0 || x.line != l[x.idx - 1])
+            .Select(x => x.line)
+            .ToList());
 
-    /// <summary>删除行尾空白</summary>
-    public void RemoveTrailingSpace()
-        => TransformLines(l => l.Select(x => x.TrimEnd()).ToList());
+    /// <summary>去重并排序（「删除重复行」的另一变体）</summary>
+    public void RemoveDuplicateLinesSorted()
+        => TransformLines(l =>
+        {
+            var sorted = l.OrderBy(x => x, StringComparer.Ordinal).ToList();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            return sorted.Where(seen.Add).ToList();
+        });
 
-    /// <summary>删除所有空白（行首行尾）</summary>
-    public void RemoveAllSpace()
-        => TransformLines(l => l.Select(x => x.Trim()).ToList());
+    /// <summary>
+    /// ND2「去除行首空白」（ccnotepad.cpp:9033 → findwin.cpp:308 removeLineHeadEndBlank(1)）：
+    /// 静默正则全替 <c>^[ \t]+</c>，只吃空格和 TAB，无视选区处理整篇。
+    /// </summary>
+    public int RemoveLineHeadBlank() => SilentRegexReplaceAll("^[ \t]+");
+
+    /// <summary>ND2「去除行尾空白」(:9042 → removeLineHeadEndBlank(2))：<c>[ \t]+$</c></summary>
+    public int RemoveLineEndBlank() => SilentRegexReplaceAll("[ \t]+$");
+
+    /// <summary>ND2「去除行首尾空白」(:9051)：连着调上面两条，各报各的次数（状态栏后一条盖掉前一条）</summary>
+    public (int Head, int End) RemoveLineHeadEndBlank() => (RemoveLineHeadBlank(), RemoveLineEndBlank());
+
+    /// <summary>ND2 的静默调用通道：m_isStatic=true 的 slot_replaceAll，正则、整篇、无视选区、不弹确认</summary>
+    private int SilentRegexReplaceAll(string pattern)
+        => ReplaceAll(new SearchCondition(pattern, SearchMode.Regex, MatchCase: true, WholeWord: false), string.Empty);
 
     // ==================== 单行操作 ====================
 
+    /// <summary>ND2 insertNewLineAboveCurrentLine（scintillaeditview.cpp:3014）：在第 N 行起点前插一个行尾符</summary>
     public void InsertBlankLineAbove()
     {
-        int line = CurrentLine;
-        WithUndoGroup(() => _scintilla.InsertText(LineStartPos(line), EolString));
-        GoToLine(line);
+        string newline = EolString;
+        int currentLine = CurrentLine;
+
+        if (currentLine == 0)
+            _scintilla.InsertText(0, newline);                       // 光标在第一行：直接在文档最前面垫一个行尾符
+        else
+            _scintilla.InsertText(LineStartPos(currentLine) - newline.Length, newline);
+
+        // 插完当前行号还没变，它指向的就是新出来的那条空行
+        _scintilla.SetEmptySelection(LineStartPos(currentLine));
     }
 
+    /// <summary>ND2 insertNewLineBelowCurrentLine（:3032）：末行只能 append，其余在下一行起点前插</summary>
     public void InsertBlankLineBelow()
     {
-        int line = CurrentLine;
-        WithUndoGroup(() => _scintilla.InsertText(LineEndPos(line), EolString));
-        GoToLine(line + 1);
+        string newline = EolString;
+        int currentLine = CurrentLine;
+
+        if (currentLine == _scintilla.Lines.Count - 1)
+            _scintilla.AppendText(newline);
+        else
+            _scintilla.InsertText(LineStartPos(currentLine + 1), newline);
+
+        _scintilla.SetEmptySelection(LineStartPos(currentLine + 1));
     }
 
-    public void DuplicateCurrentLine()
+    /// <summary>ND2「复制当前行」Ctrl+D = SCI_LINEDUPLICATE（ccnotepad.cpp:9480）</summary>
+    public void DuplicateCurrentLine() => _scintilla.DirectMessage(2404, IntPtr.Zero, IntPtr.Zero);
+
+    /// <summary>ND2 上移/下移都是 SCI_MOVESELECTEDLINESUP/DOWN：有选区时整组选区行一起走</summary>
+    public void MoveSelectedLinesUp() => _scintilla.DirectMessage(2620, IntPtr.Zero, IntPtr.Zero);
+
+    public void MoveSelectedLinesDown()
     {
-        int line = CurrentLine;
-        string text = LineFull(line);
-        WithUndoGroup(() => _scintilla.InsertText(LineEndPos(line), text));
-        GoToLine(line + 1);
-    }
-
-    public void MoveCurrentLineUp()
-    {
-        int line = CurrentLine;
-        if (line <= 0) return;
-        string cur = LineFull(line);
-        string prev = LineFull(line - 1);
-
-        WithUndoGroup(() =>
-        {
-            SetLineRange(line - 1, line, new[] { cur.TrimEnd('\r', '\n'), prev.TrimEnd('\r', '\n') });
-        });
-        GoToLine(line - 1);
-    }
-
-    public void MoveCurrentLineDown()
-    {
-        int line = CurrentLine;
-        if (line >= _scintilla.Lines.Count - 1) return;
-        string cur = LineFull(line);
-        string next = LineFull(line + 1);
-
-        WithUndoGroup(() =>
-        {
-            SetLineRange(line, line + 1, new[] { next.TrimEnd('\r', '\n'), cur.TrimEnd('\r', '\n') });
-        });
-        GoToLine(line + 1);
+        _scintilla.DirectMessage(2621, IntPtr.Zero, IntPtr.Zero);
+        // ND2 下移后还要 SCI_SCROLLRANGE 把选区拉回可视区
+        _scintilla.ScrollRange(_scintilla.SelectionEnd, _scintilla.SelectionStart);
     }
 
     public void DeleteCurrentLine()
@@ -403,25 +553,39 @@ public partial class EditorControl
         SafeCopy();
     }
 
-    /// <summary>合并选区内的行</summary>
-    public void JoinLines()
+    /// <summary>
+    /// ND2 slot_splitLines（ccnotepad.cpp:9502）：先要求**恰好一个选区**（多光标静默什么都不做），
+    /// 把选区扩到整行后 SCI_TARGETFROMSELECTION，再 SCI_LINESSPLIT。
+    /// ND2 全仓从不 SETEDGEMODE，edgeMode 恒为 EDGE_NONE（:9514 的分支只会走 0），
+    /// 传 0 = 让 Scintilla 自己取可视区像素宽（Editor.cpp:1625 GetTextRectangle().Width()）。
+    /// </summary>
+    public void SplitLines()
     {
-        var (first, last) = WorkLineRange();
-        if (last <= first) return;
+        if (_scintilla.Selections.Count != 1) return;
 
-        var merged = new StringBuilder(LineBody(first));
-        for (int i = first + 1; i <= last; i++)
-        {
-            merged.Append(' ');
-            merged.Append(LineBody(i).TrimStart());
-        }
-
-        WithUndoGroup(() => SetLineRange(first, last, new[] { merged.ToString() }));
-        GoToLine(first);
+        var (first, last) = SelectionLinesRange();
+        _scintilla.SetSelection(LineStartPos(first), LineContentEndPos(last));
+        _scintilla.TargetFromSelection();
+        _scintilla.DirectMessage(2289, IntPtr.Zero, IntPtr.Zero);
     }
 
-    /// <summary>把选区中的转义 \n 变成真正换行</summary>
-    public void SplitLines()
+    /// <summary>
+    /// ND2 slot_joinLines（ccnotepad.cpp:9533）：首末行相同直接不动作，否则扩到整行后 SCI_LINESJOIN。
+    /// 引擎行为（Editor.cpp:1593）：删掉行尾符，**只有前一行末不是空格时补一个空格**分隔，
+    /// 续行自己的行首空白**原样保留**——所以自己拿 TrimStart 拼是错的。
+    /// </summary>
+    public void JoinLines()
+    {
+        var (first, last) = SelectionLinesRange();
+        if (first == last) return;
+
+        _scintilla.SetSelection(LineStartPos(first), LineContentEndPos(last));
+        _scintilla.TargetFromSelection();
+        _scintilla.DirectMessage(2288, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    /// <summary>把选区中的转义 \n 变成真正换行（ND2 没有这一项，本地增强，挂在「更多行操作」）</summary>
+    public void ExpandEscapedNewlines()
     {
         string sel = SelectedText;
         if (string.IsNullOrEmpty(sel)) return;
@@ -434,139 +598,305 @@ public partial class EditorControl
 
     // ==================== 大小写 ====================
 
+    /// <summary>对应 ND2 的 TextCaseType（scintillaeditview.h:39）</summary>
     public enum CaseMode { Upper, Lower, Proper, ProperBlend, Sentence, SentenceBlend, Invert, Random }
 
-    /// <summary>作用于选区；无选区时作用于光标所在单词</summary>
+    /// <summary>
+    /// ND2 convertSelectedTextTo（scintillaeditview.cpp:2813）：只吃选区，
+    /// 没有选区就什么都不做（不动当前行、也不提示），换完把选区原样还回去。
+    /// </summary>
     public void ChangeCase(CaseMode mode)
     {
         int start = _scintilla.SelectionStart;
         int end = _scintilla.SelectionEnd;
-
-        if (start == end)
-        {
-            int wordStart = _scintilla.WordStartPosition(_scintilla.CurrentPosition, true);
-            int wordEnd = _scintilla.WordEndPosition(_scintilla.CurrentPosition, true);
-            if (wordEnd <= wordStart) return;
-            start = wordStart;
-            end = wordEnd;
-        }
+        if (start == end) return;
 
         string text = _scintilla.GetTextRange(start, end - start);
-        string result = mode switch
-        {
-            CaseMode.Upper => text.ToUpperInvariant(),
-            CaseMode.Lower => text.ToLowerInvariant(),
-            CaseMode.Proper => ToProper(text, true),
-            CaseMode.ProperBlend => ToProper(text, false),
-            CaseMode.Sentence => ToSentence(text, true),
-            CaseMode.SentenceBlend => ToSentence(text, false),
-            CaseMode.Invert => ToInvert(text),
-            CaseMode.Random => ToRandomCase(text),
-            _ => text,
-        };
+        string result = ConvertCase(text, mode);
 
-        WithUndoGroup(() =>
-        {
-            _scintilla.TargetStart = start;
-            _scintilla.TargetEnd = end;
-            _scintilla.ReplaceTarget(result);
-        });
+        _scintilla.TargetStart = start;
+        _scintilla.TargetEnd = end;
+        WithUndoGroup(() => _scintilla.ReplaceTarget(result));
+        _scintilla.SetSelection(start, end);
     }
 
-    private static string ToProper(string text, bool lowerRest)
+    /// <summary>逐条照 ND2 changeCase（scintillaeditview.cpp:2695-2811）搬过来，字符判断按 UTF-16 码元，和 Qt 的 QChar 一致</summary>
+    public static string ConvertCase(string text, CaseMode mode)
     {
-        var sb = new StringBuilder(text.Length);
-        bool atWordStart = true;
-        foreach (char c in text)
+        if (text.Length == 0) return text;
+
+        switch (mode)
         {
-            if (char.IsLetter(c))
+            case CaseMode.Upper:
+                return text.ToUpperInvariant();
+            case CaseMode.Lower:
+                return text.ToLowerInvariant();
+
+            case CaseMode.Proper:
+            case CaseMode.ProperBlend:
             {
-                sb.Append(atWordStart ? char.ToUpperInvariant(c)
-                      : (lowerRest ? char.ToLowerInvariant(c) : c));
-                atWordStart = false;
+                bool force = mode == CaseMode.Proper;
+                char[] a = text.ToCharArray();
+                for (int i = 0; i < a.Length; i++)
+                {
+                    if (!char.IsLetter(a[i])) continue;
+
+                    // 前一个字符不是字母也不是数字才算词首
+                    if (i < 1 || !char.IsLetterOrDigit(a[i - 1])) a[i] = char.ToUpperInvariant(a[i]);
+                    else if (force) a[i] = char.ToLowerInvariant(a[i]);
+
+                    // 撇号例外：it's / rock'n'roll 里的词首字母要压回小写（BLEND 也生效）
+                    if (i >= 2 && a[i - 1] == '\'' && char.IsLetter(a[i - 2])) a[i] = char.ToLowerInvariant(a[i]);
+                }
+                return new string(a);
             }
-            else
+
+            case CaseMode.Sentence:
+            case CaseMode.SentenceBlend:
             {
-                sb.Append(c);
-                atWordStart = !char.IsDigit(c);
+                bool force = mode == CaseMode.Sentence;
+                char[] a = text.ToCharArray();
+                bool isNewSentence = true;
+                bool wasEolR = false;
+                bool wasEolN = false;
+                for (int i = 0; i < a.Length; i++)
+                {
+                    if (char.IsLetter(a[i]))
+                    {
+                        if (isNewSentence)
+                        {
+                            a[i] = char.ToUpperInvariant(a[i]);
+                            isNewSentence = false;
+                        }
+                        else if (force) a[i] = char.ToLowerInvariant(a[i]);
+
+                        wasEolR = false;
+                        wasEolN = false;
+
+                        // 孤立的 i → I：前后是空格/括号/引号/撇号才算孤立
+                        if (a[i] == 'i'
+                            && i >= 1 && (char.IsWhiteSpace(a[i - 1]) || a[i - 1] == '(' || a[i - 1] == '"')
+                            && i + 1 < a.Length && (char.IsWhiteSpace(a[i + 1]) || a[i + 1] == '\''))
+                        {
+                            a[i] = 'I';
+                        }
+                    }
+                    else if (a[i] is '.' or '!' or '?')
+                    {
+                        // 后面紧跟字母数字不算新句，防 3.14；ND2 只认半角标点
+                        isNewSentence = i + 1 < a.Length && !char.IsLetterOrDigit(a[i + 1]);
+                    }
+                    else if (a[i] == '\r')
+                    {
+                        if (wasEolR) isNewSentence = true; else wasEolR = true;
+                    }
+                    else if (a[i] == '\n')
+                    {
+                        if (wasEolN) isNewSentence = true; else wasEolN = true;
+                    }
+                }
+                return new string(a);
+            }
+
+            case CaseMode.Invert:
+            {
+                char[] a = text.ToCharArray();
+                for (int i = 0; i < a.Length; i++)
+                    a[i] = char.IsLower(a[i]) ? char.ToUpperInvariant(a[i]) : char.ToLowerInvariant(a[i]);
+                return new string(a);
+            }
+
+            default:
+            {
+                char[] a = text.ToCharArray();
+                for (int i = 0; i < a.Length; i++)
+                {
+                    if (!char.IsLetter(a[i])) continue;
+                    a[i] = RandomBit() ? char.ToUpperInvariant(a[i]) : char.ToLowerInvariant(a[i]);
+                }
+                return new string(a);
             }
         }
-        return sb.ToString();
     }
 
-    private static string ToSentence(string text, bool lowerRest)
-    {
-        var sb = new StringBuilder(text.Length);
-        bool atSentenceStart = true;
-        foreach (char c in text)
-        {
-            if (char.IsLetter(c))
-            {
-                sb.Append(atSentenceStart ? char.ToUpperInvariant(c)
-                      : (lowerRest ? char.ToLowerInvariant(c) : c));
-                atSentenceStart = false;
-            }
-            else
-            {
-                sb.Append(c);
-                if (c is '.' or '!' or '?' or '。' or '！' or '？') atSentenceStart = true;
-            }
-        }
-        return sb.ToString();
-    }
-
-    private static string ToInvert(string text)
-    {
-        var sb = new StringBuilder(text.Length);
-        foreach (char c in text)
-            sb.Append(char.IsUpper(c) ? char.ToLowerInvariant(c)
-                    : char.IsLower(c) ? char.ToUpperInvariant(c) : c);
-        return sb.ToString();
-    }
-
-    private static string ToRandomCase(string text)
-    {
-        var rnd = new Random();
-        var sb = new StringBuilder(text.Length);
-        foreach (char c in text)
-        {
-            if (!char.IsLetter(c)) { sb.Append(c); continue; }
-            sb.Append(rnd.Next(2) == 0 ? char.ToUpperInvariant(c) : char.ToLowerInvariant(c));
-        }
-        return sb.ToString();
-    }
+    // ND2 用没播种的 std::rand()，等价于每次启动都是同一串；这里只要"看起来随机"，不做那层复刻
+    private static readonly Random CaseRandom = new();
+    private static bool RandomBit() => (CaseRandom.Next(2) & 1) == 1;
 
     // ==================== Tab / 空格 / 行尾符 ====================
 
-    public void TabsToSpaces(bool leadingOnly)
-    {
-        int tabWidth = _scintilla.TabWidth;
-        TransformLines(lines => lines.Select(l =>
-        {
-            if (leadingOnly)
-            {
-                int i = 0;
-                while (i < l.Length && (l[i] == ' ' || l[i] == '\t')) i++;
-                return l[..i].Replace("\t", new string(' ', tabWidth)) + l[i..];
-            }
-            return l.Replace("\t", new string(' ', tabWidth));
-        }).ToList());
-    }
+    /// <summary>ND2 <c>SpaceTab</c> 三态（ccnotepad.cpp:9161/9166/9171 → spaceTabConvert）</summary>
+    public enum SpaceTabConversion { TabToSpace, SpaceToTabAll, SpaceToTabLeading }
+
+    public void TabsToSpaces() => ConvertTabsSpaces(SpaceTabConversion.TabToSpace);
 
     public void SpacesToTabs(bool leadingOnly)
+        => ConvertTabsSpaces(leadingOnly ? SpaceTabConversion.SpaceToTabLeading : SpaceTabConversion.SpaceToTabAll);
+
+    /// <summary>
+    /// 照 ND2 <c>spaceTabConvert</c>（ccnotepad.cpp:9270-9477）搬的列感知互转：
+    /// 读全文 → 按制表位重排 → SCI_SETTEXT 写回 → GOTOPOS，**无视选区**，各包一个 undo group。
+    /// TAB→空格是 <c>tabWidth - (column % tabWidth)</c> 个空格（不是一个 TAB 换 tabWidth 个）；
+    /// 空格→TAB 是**制表位对齐**（<c>tabStop</c> 从 tabWidth-1 起、每跨一档加 tabWidth），不是每 tabWidth 个空格并一根 TAB。
+    /// 列只让「一个字符」计一次：ND2 判 UTF-8 首字节 <c>(c &amp; 0xC0) != 0x80</c>，这里等价地跳过代理项低半区。
+    /// </summary>
+    public void ConvertTabsSpaces(SpaceTabConversion type)
     {
-        int tabWidth = _scintilla.TabWidth;
-        string run = new(' ', tabWidth);
-        TransformLines(lines => lines.Select(l =>
+        var (text, newCurrentPos) = SpaceTabConvert(_scintilla.Text, _scintilla.TabWidth, _scintilla.CurrentPosition, type);
+        if (text == null) return;
+
+        WithUndoGroup(() =>
         {
-            if (leadingOnly)
+            _scintilla.Text = text;
+            _scintilla.SetEmptySelection(newCurrentPos);
+        });
+    }
+
+    /// <summary>
+    /// 上面那条的纯函数部分（拆出来只为能把状态机单独跑一遍）。返回 null = ND2 的那两个提前 return。
+    /// </summary>
+    public static (string? Text, int Caret) SpaceTabConvert(string source, int tabWidth, int currentPos, SpaceTabConversion type)
+    {
+        if (source.Length == 0) return (null, 0);     // ND2: docLength < 2 直接 return
+
+        // ND2 对 Tab2Space 先数 TAB，一个都没有就连 undo 都不开、直接返回
+        if (type == SpaceTabConversion.TabToSpace && source.IndexOf('\t') < 0) return (null, 0);
+
+        // ND2 的 source 是 NUL 结尾的缓冲，越界读拿到的是 '\0'；这里用同样的读法兜住边界
+        char Ch(int index) => index >= 0 && index < source.Length ? source[index] : '\0';
+
+        var dest = new StringBuilder(source.Length + 16);
+        int column = 0;
+        int newCurrentPos = 0;
+
+        if (type == SpaceTabConversion.TabToSpace)
+        {
+            for (int i = 0; i < source.Length; i++)
             {
-                int i = 0;
-                while (i < l.Length && (l[i] == ' ' || l[i] == '\t')) i++;
-                return l[..i].Replace(run, "\t") + l[i..];
+                char c = Ch(i);
+                if (c == '\t')
+                {
+                    int insertTabs = tabWidth - (column % tabWidth);
+                    for (int j = 0; j < insertTabs; j++)
+                    {
+                        dest.Append(' ');
+                        if (i <= currentPos) newCurrentPos++;
+                    }
+                    column += insertTabs;
+                }
+                else
+                {
+                    dest.Append(c);
+                    if (i <= currentPos) newCurrentPos++;
+                    if (c == '\n' || c == '\r') column = 0;
+                    else if (!char.IsLowSurrogate(c)) column++;
+                }
             }
-            return l.Replace(run, "\t");
-        }).ToList());
+        }
+        else
+        {
+            bool onlyLeading = type == SpaceTabConversion.SpaceToTabLeading;
+            // 三个变量都活在循环外，这是 ND2 的原样（counter 只在特定分支里归零）
+            bool nextChar = false;
+            int counter = 0;
+            int tabStop = tabWidth - 1;   // remember, counting from zero!
+            bool nonSpaceFound = false;
+
+            for (int i = 0; i < source.Length; i++)
+            {
+                if (!nonSpaceFound)
+                {
+                    while (Ch(i + counter) == ' ')
+                    {
+                        if (column + counter == tabStop)
+                        {
+                            tabStop += tabWidth;
+                            if (counter >= 1)
+                            {
+                                dest.Append('\t');
+                                i += counter;
+                                column += counter + 1;
+                                counter = 0;
+                                nextChar = true;
+                                if (i <= currentPos) newCurrentPos++;
+                                break;
+                            }
+                            // 后面还跟着空格或 TAB，单个空格也并成 TAB（这一支不 break，接着扫）
+                            else if (Ch(i + 1) == ' ' || Ch(i + 1) == '\t')
+                            {
+                                dest.Append('\t');
+                                i++;
+                                column += 1;
+                                counter = 0;
+                                if (i <= currentPos) newCurrentPos++;
+                            }
+                            else
+                            {
+                                // 孤零零一个空格，不并
+                                dest.Append(Ch(i));
+                                column += 1;
+                                counter = 0;
+                                nextChar = true;
+                                if (i <= currentPos) newCurrentPos++;
+                                break;
+                            }
+                        }
+                        else counter++;
+                    }
+
+                    if (nextChar)
+                    {
+                        nextChar = false;
+                        continue;
+                    }
+
+                    // 空格被右边的 TAB「吸收」，一起并成一根 TAB
+                    if (Ch(i) == ' ' && Ch(i + counter) == '\t')
+                    {
+                        dest.Append('\t');
+                        i += counter;
+                        column = tabStop + 1;
+                        tabStop += tabWidth;
+                        counter = 0;
+                        if (i <= currentPos) newCurrentPos++;
+                        continue;
+                    }
+                }
+
+                // 「行首」版：本行第一个非空白字符之后就不再转换
+                if (onlyLeading && !nonSpaceFound) nonSpaceFound = true;
+
+                char c = Ch(i);
+                if (c == '\n' || c == '\r')
+                {
+                    dest.Append(c);
+                    column = 0;
+                    tabStop = tabWidth - 1;
+                    nonSpaceFound = false;
+                }
+                else if (c == '\t')
+                {
+                    dest.Append(c);
+                    column = tabStop + 1;
+                    tabStop += tabWidth;
+                    counter = 0;
+                }
+                else
+                {
+                    dest.Append(c);
+                    counter = 0;
+                    if (!char.IsLowSurrogate(c))
+                    {
+                        column++;
+                        if (column > 0 && column % tabWidth == 0) tabStop += tabWidth;
+                    }
+                }
+
+                if (i <= currentPos) newCurrentPos++;
+            }
+        }
+
+        return (dest.ToString(), newCurrentPos);
     }
 
     public int TabWidth
@@ -674,33 +1004,98 @@ public partial class EditorControl
     /// <summary>把当前选区复制到选区覆盖的每一行行首</summary>
     public void PasteToEachSelectedLine() => _scintilla.MultipleSelectAddEach();
 
-    // ==================== 书签批量操作 ====================
+    // ==================== 书签批量操作（照 ND2 scintillaeditview.cpp:1479-1640） ====================
 
-    /// <summary>把所有带书签的行复制到剪贴板</summary>
-    public void CopyLinesWithBookmarks()
+    /// <summary>ND2 的 getMarkedLine 走 SCI_LINELENGTH，取到的是含行尾的整行，所以行间天然带换行</summary>
+    private string MarkedLine(int line) => LineFull(line) + EolString;
+
+    /// <summary>ND2 deleteMarkedline：先摘掉书签标记，再连行尾一起把整行替换成空</summary>
+    private void DeleteMarkedLine(int line)
+    {
+        int begin = LineStartPos(line);
+        RemoveBookmark(line);
+        _scintilla.TargetStart = begin;
+        _scintilla.TargetEnd = LineEndPos(line);
+        _scintilla.ReplaceTarget(string.Empty);
+    }
+
+    /// <summary>ND2 replaceMarkedline：SCI_POSITIONFROMLINE → SCI_GETLINEENDPOSITION，不含行尾，粘贴不会把下一行吸上来</summary>
+    private void ReplaceMarkedLine(int line, string text)
+    {
+        _scintilla.TargetStart = LineStartPos(line);
+        _scintilla.TargetEnd = LineContentEndPos(line);
+        _scintilla.ReplaceTarget(text);
+    }
+
+    private string CollectMarkedLines()
     {
         var sb = new StringBuilder();
         for (int i = 0; i < _scintilla.Lines.Count; i++)
         {
-            if (HasBookmark(i)) sb.Append(LineFull(i));
+            if (HasBookmark(i)) sb.Append(MarkedLine(i));
         }
-        if (sb.Length == 0) return;
+        return sb.ToString();
+    }
 
-        try { System.Windows.Clipboard.SetText(sb.ToString()); }
+    private static void SetClipboard(string text)
+    {
+        try { System.Windows.Clipboard.SetText(text); }
         catch { /* 剪贴板被占用时忽略 */ }
     }
 
-    public void DeleteLinesWithBookmarks()
+    /// <summary>复制书签行。没有书签时 ND2 也会把剪贴板写成空串，这里照做</summary>
+    public void CopyMarkedLines() => SetClipboard(CollectMarkedLines());
+
+    /// <summary>剪切书签行：先把文本收好，倒序删除（行号不失效），整体一个撤销组，最后写剪贴板</summary>
+    public void CutMarkedLines()
     {
-        var keep = new List<string>();
-        for (int i = 0; i < _scintilla.Lines.Count; i++)
+        string text = CollectMarkedLines();
+        WithUndoGroup(() =>
         {
-            if (!HasBookmark(i)) keep.Add(LineBody(i));
-        }
-        WithUndoGroup(() => SetLineRange(0, _scintilla.Lines.Count - 1, keep));
+            for (int i = _scintilla.Lines.Count - 1; i >= 0; i--)
+            {
+                if (HasBookmark(i)) DeleteMarkedLine(i);
+            }
+        });
+        SetClipboard(text);
     }
 
-    /// <summary>反转所有书签（有书签的行取消，没书签的行加上）</summary>
+    /// <summary>
+    /// 粘贴(替换)书签行：把剪贴板**整块**文本替换进每一个书签行，不是按行配对；
+    /// 书签数为 0 什么都不做，粘完书签标记仍留在原行上。
+    /// </summary>
+    public void PasteToMarkedLines()
+    {
+        string text;
+        try
+        {
+            if (!System.Windows.Clipboard.ContainsText()) return;     // ND2 的 mimeData->hasText() 门槛
+            text = System.Windows.Clipboard.GetText();
+        }
+        catch { return; }
+
+        WithUndoGroup(() =>
+        {
+            for (int i = _scintilla.Lines.Count - 1; i >= 0; i--)
+            {
+                if (HasBookmark(i)) ReplaceMarkedLine(i, text);
+            }
+        });
+    }
+
+    /// <summary>删除书签行（isMarked=true）/ 删除未标记行（isMarked=false），两者是同一个函数的两个方向</summary>
+    public void DeleteMarkedLines(bool isMarked)
+    {
+        WithUndoGroup(() =>
+        {
+            for (int i = _scintilla.Lines.Count - 1; i >= 0; i--)
+            {
+                if (HasBookmark(i) == isMarked) DeleteMarkedLine(i);
+            }
+        });
+    }
+
+    /// <summary>反转所有书签（有书签的行取消，没书签的行加上）。ND2 这里不包撤销组，我们包了，算刻意偏离</summary>
     public void ToggleBookmarksOthers()
     {
         WithUndoGroup(() =>
@@ -838,87 +1233,5 @@ public partial class EditorControl
         }
 
         WithUndoGroup(() => SetLineRange(first, last, lines.Select(x => x.PadRight(max))));
-    }
-
-    // ==================== 块注释 / 流式注释 ====================
-
-    /// <summary>给选区每行加行注释前缀</summary>
-    public void BlockComment(string prefix)
-    {
-        if (string.IsNullOrEmpty(prefix)) return;
-        var (first, last) = WorkLineRange();
-        if (last < first) return;
-
-        WithUndoGroup(() =>
-        {
-            for (int i = first; i <= last; i++)
-                _scintilla.InsertText(LineStartPos(i), prefix);
-        });
-    }
-
-    /// <summary>去掉选区每行的行注释前缀</summary>
-    public void BlockUncomment(string prefix)
-    {
-        if (string.IsNullOrEmpty(prefix)) return;
-        var (first, last) = WorkLineRange();
-        if (last < first) return;
-
-        WithUndoGroup(() =>
-        {
-            for (int i = first; i <= last; i++)
-            {
-                string body = LineBody(i);
-                int idx = body.IndexOf(prefix, StringComparison.Ordinal);
-                if (idx < 0) continue;
-                int len = prefix.Length;
-                if (idx + len < body.Length && body[idx + len] == ' ') len++;
-                _scintilla.TargetStart = LineStartPos(i) + idx;
-                _scintilla.TargetEnd = LineStartPos(i) + idx + len;
-                _scintilla.ReplaceTarget(string.Empty);
-            }
-        });
-    }
-
-    /// <summary>把选区包进流式注释（/* ... *\/）</summary>
-    public void StreamComment(string begin, string end)
-    {
-        if (string.IsNullOrEmpty(begin) || string.IsNullOrEmpty(end)) return;
-        if (_scintilla.SelectionStart == _scintilla.SelectionEnd) return;
-
-        int s = _scintilla.SelectionStart;
-        int e = _scintilla.SelectionEnd;
-        string text = _scintilla.GetTextRange(s, e - s);
-
-        bool already = text.StartsWith(begin) && text.EndsWith(end);
-        string result = already
-            ? text[begin.Length..^end.Length]
-            : begin + text + end;
-
-        WithUndoGroup(() =>
-        {
-            _scintilla.TargetStart = s;
-            _scintilla.TargetEnd = e;
-            _scintilla.ReplaceTarget(result);
-        });
-    }
-
-    /// <summary>切换选区内每一行的注释状态</summary>
-    public void ToggleLineComment(string prefix)
-    {
-        var (first, last) = WorkLineRange();
-        if (last < first || string.IsNullOrEmpty(prefix)) return;
-
-        bool anyUncommented = false;
-        for (int i = first; i <= last; i++)
-        {
-            if (!LineBody(i).TrimStart().StartsWith(prefix, StringComparison.Ordinal))
-            {
-                anyUncommented = true;
-                break;
-            }
-        }
-
-        if (anyUncommented) BlockComment(prefix);
-        else BlockUncomment(prefix);
     }
 }
