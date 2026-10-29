@@ -85,11 +85,14 @@ public static class ThemeService
     /// <summary>括号配对高亮用的指示器编号（8 已被查找高亮占用）</summary>
     public const int BraceIndicatorIndex = 9;
 
-    /// <summary>括号配对成功时的高亮框色</summary>
-    public static DrawingColor BraceGoodBox => IsDark ? D(0x3B, 0x51, 0x6D) : D(0xCC, 0xE8, 0xFF);
+    /// <summary>括号配不上时改字色用的指示器编号</summary>
+    public const int BraceBadForeIndicatorIndex = 10;
 
-    /// <summary>括号配不上时的警示框色</summary>
-    public static DrawingColor BraceBadBox => IsDark ? D(0x8B, 0x3A, 0x3A) : D(0xFF, 0x90, 0x90);
+    /// <summary>配对成功时垫在字符下面的方框色（亮=浅灰 暗=深绿）</summary>
+    public static DrawingColor BraceGoodBox => IsDark ? D(0x12, 0x5A, 0x24) : D(0xDE, 0xDE, 0xDE);
+
+    /// <summary>配不上时把字符画成的颜色（暗红；暗色主题下用亮红保证可读）</summary>
+    public static DrawingColor BraceBadFore => IsDark ? D(0xFF, 0x80, 0x80) : D(0x80, 0x00, 0x00);
 
     // ===== HTML / XML / JSON / CSS 专用 =====
     private static DrawingColor HtmlTagC => IsDark ? D(0xF9, 0x26, 0x72) : D(0x00, 0x00, 0xFF);      // 标签：蓝
@@ -138,14 +141,18 @@ public static class ThemeService
 
         sci.CaretForeColor = IsDark ? D(0xAE, 0xAF, 0xAD) : D(0x00, 0x00, 0x00);
 
-        // ===== 括号配对高亮 =====
+        // ===== 括号配对高亮（配色与匹配模式对齐参考编辑器）=====
         // 样式 34/35（BraceLight/BraceBad）在当前原生 Scintilla 5.3.6 实测不渲染，
-        // 改走 9 号指示器（FullBox 方框），由 EditorControl 在 UpdateUI 里填充。
-        // 8 号指示器已被查找高亮占用，这里用 9 号。
+        // 故走指示器：9 号画方框垫底（字符画在框上），10 号在配不上时改字色。
+        // 8 号指示器已被查找高亮占用。
         var braceInd = sci.Indicators[BraceIndicatorIndex];
         braceInd.Style = ScintillaNET.IndicatorStyle.FullBox;
         braceInd.Alpha = 255;
         braceInd.ForeColor = BraceGoodBox;
+        braceInd.Under = true;
+        var braceBadInd = sci.Indicators[BraceBadForeIndicatorIndex];
+        braceBadInd.Style = ScintillaNET.IndicatorStyle.TextFore;
+        braceBadInd.ForeColor = BraceBadFore;
 
         var markerColor = IsDark ? D(0xA0, 0xA0, 0xA0) : D(0x90, 0x90, 0x90);
         for (int i = 25; i <= 31; i++)

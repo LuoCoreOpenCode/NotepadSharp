@@ -151,8 +151,8 @@ public partial class EditorControl : WindowsFormsHost
     // 外部文件拖放接收器：挂在 Scintilla 子窗口上，句柄重建（浮动/停靠）后要重挂
     private FileDropSink? _dropSink;
 
-    // 括号配对高亮当前填了的格子（指示器 9），光标挪走时只清这几个位置
-    private readonly List<int> _braceFill = new();
+    // 括号配对高亮当前填了的格子（指示器编号 + 位置），光标挪走时只清这几个位置
+    private readonly List<(int Index, int Pos)> _braceFill = new();
 
     /// <summary>外部文件被拖到本编辑器上并松手（主窗口据此打开文件）</summary>
     public event Action<string[]>? FilesDropped;
@@ -273,9 +273,9 @@ public partial class EditorControl : WindowsFormsHost
     }
 
     /// <summary>
-    /// 光标贴到括号边上时，用 9 号指示器点亮配对的另一半（方框高亮，颜色随主题）；
-    /// 光标在括号前或后都算贴着；找不到配对（比如只有半个括号）就把这只标红。
-    /// 刻意不含 &lt; &gt;：纯文本里比较符号到处都是，会把不相干的字符点亮。
+    /// 光标贴到括号边上时点亮配对的另一半（配色与匹配模式对齐参考编辑器）：
+    /// 宽松匹配——光标上、前 1、前 2 个字符都算贴着；包含 () [] {} &lt;&gt;（HTML 标签也配对）。
+    /// 配上的另一半垫方框底色，配不上的那只把字符画成警示色。
     /// </summary>
     private void UpdateBraceMatch()
     {
@@ -283,8 +283,9 @@ public partial class EditorControl : WindowsFormsHost
         var caret = sci.CurrentPosition;
         int bracePos = -1;
 
-        if (caret > 0 && IsBrace((char)sci.GetCharAt(caret - 1))) bracePos = caret - 1;
-        else if (caret < sci.TextLength && IsBrace((char)sci.GetCharAt(caret))) bracePos = caret;
+        if (caret < sci.TextLength && IsBrace((char)sci.GetCharAt(caret))) bracePos = caret;
+        else if (caret > 0 && IsBrace((char)sci.GetCharAt(caret - 1))) bracePos = caret - 1;
+        else if (caret > 1 && IsBrace((char)sci.GetCharAt(caret - 2))) bracePos = caret - 2;
 
         ClearBraceFill();
 
@@ -297,27 +298,31 @@ public partial class EditorControl : WindowsFormsHost
         // 指示器只画在已着色的区域上，先把两个括号附近的着色补齐，避免刚载入的大文件里框不出来
         sci.Colorize(Math.Min(bracePos, other), Math.Abs(bracePos - other) + 1);
 
-        sci.Indicators[ThemeService.BraceIndicatorIndex].ForeColor =
-            bad ? ThemeService.BraceBadBox : ThemeService.BraceGoodBox;
-        sci.IndicatorCurrent = ThemeService.BraceIndicatorIndex;
+        var fillIndex = bad ? ThemeService.BraceBadForeIndicatorIndex : ThemeService.BraceIndicatorIndex;
+        sci.Indicators[fillIndex].ForeColor =
+            bad ? ThemeService.BraceBadFore : ThemeService.BraceGoodBox;
+        sci.IndicatorCurrent = fillIndex;
         sci.IndicatorFillRange(bracePos, 1);
-        _braceFill.Add(bracePos);
+        _braceFill.Add((fillIndex, bracePos));
         if (!bad)
         {
             sci.IndicatorFillRange(match, 1);
-            _braceFill.Add(match);
+            _braceFill.Add((fillIndex, match));
         }
     }
 
     /// <summary>只清掉自己填的那两个格子，不动别的指示器</summary>
     private void ClearBraceFill()
     {
-        _scintilla.IndicatorCurrent = ThemeService.BraceIndicatorIndex;
-        foreach (var pos in _braceFill) _scintilla.IndicatorClearRange(pos, 1);
+        foreach (var (index, pos) in _braceFill)
+        {
+            _scintilla.IndicatorCurrent = index;
+            _scintilla.IndicatorClearRange(pos, 1);
+        }
         _braceFill.Clear();
     }
 
-    private static bool IsBrace(char c) => c is '(' or ')' or '[' or ']' or '{' or '}';
+    private static bool IsBrace(char c) => c is '(' or ')' or '[' or ']' or '{' or '}' or '<' or '>';
 
     private void OnTextChanged(object? sender, EventArgs e)
     {

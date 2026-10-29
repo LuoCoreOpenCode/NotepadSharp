@@ -9,7 +9,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.1.4</Version>
+    <Version>1.1.5</Version>
     <AssemblyName>NotepadSharp</AssemblyName>
     <RootNamespace>NotepadSharp</RootNamespace>
     <!-- 停靠内核是 VS 的 Shell dll，已随仓库内联在 VsDlls\，编译期不再依赖本机 VS 安装路径 -->
