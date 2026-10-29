@@ -300,7 +300,7 @@ public partial class EditorControl : WindowsFormsHost
 
         var fillIndex = bad ? ThemeService.BraceBadForeIndicatorIndex : ThemeService.BraceIndicatorIndex;
         sci.Indicators[fillIndex].ForeColor =
-            bad ? ThemeService.BraceBadFore : ThemeService.BraceGoodBox;
+            bad ? ThemeService.BraceBadFore : ThemeService.BraceMatchedFore;
         sci.IndicatorCurrent = fillIndex;
         sci.IndicatorFillRange(bracePos, 1);
         _braceFill.Add((fillIndex, bracePos));
