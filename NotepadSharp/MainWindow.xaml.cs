@@ -46,12 +46,11 @@ public partial class MainWindow : Window
     private int _newFileCounter;
     private bool _readyForStatusMessages;
 
-    // 查找替换状态
-    private string _findText = string.Empty;
-    private string _replaceText = string.Empty;
-    private bool _matchCase;
-    private bool _matchWord;
-    private bool _useRegex;
+    // 查找替换状态：面板开着时以面板为准，关掉后 F3/F4 重复这一组条件（ND2 的行为）
+    private SearchCondition _lastFind = SearchCondition.Empty;
+    private string _lastReplace = string.Empty;
+    private bool _wrapAround = true;
+    private bool _backwardSearch;
 
     // 命令
     public ICommand NewFileCommand { get; private set; } = null!;
@@ -589,7 +588,10 @@ public partial class MainWindow : Window
         else if (ctrl && !shift && e.Key == Key.F) { ShowFindReplace(); e.Handled = true; }
         else if (e.Key == Key.F3 && !shift) { FindNext(); e.Handled = true; }
         else if (e.Key == Key.F3 && shift) { FindPrevious(); e.Handled = true; }
+        else if (e.Key == Key.F4 && !ctrl && !alt && !shift) { FindPrevious(); e.Handled = true; }   // ND2 的上一个用 F4
         else if (e.Key == Key.F2 && !alt) { ToggleBookmark(); e.Handled = true; }
+        else if (e.Key == Key.F7 && !ctrl && !alt && !shift) { ClearAllMarks(); e.Handled = true; }
+        else if (e.Key == Key.F8 && !ctrl && !alt && !shift) { WordHighlight(); e.Handled = true; }
         else if (ctrl && !shift && e.Key == Key.G) { GoToLine(); e.Handled = true; }
         else if (ctrl && !shift && e.Key == Key.W) { CloseCurrentFile(); e.Handled = true; }
         else if (ctrl && !shift && e.Key == Key.T) { ToggleTheme(); e.Handled = true; }
@@ -601,8 +603,9 @@ public partial class MainWindow : Window
         else if (ctrl && alt && e.Key == Key.H) { ShowHash(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.T) { ToggleTabLock(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.P) { ToggleTopmost(); e.Handled = true; }
+        else if (ctrl && alt && shift && e.Key == Key.F) { OnFindAllInOpenedFiles(this, new RoutedEventArgs()); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.F) { RunFindAllShortcut(); e.Handled = true; }
-        else if (ctrl && alt && e.Key == Key.K) { OpenBatchFind(); e.Handled = true; }
+        else if (ctrl && alt && e.Key == Key.K) { ShowBatchFind(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.C) { OpenColumnEditor(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.D) { DuplicateCurrentLine(); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.J) { JoinLines(); e.Handled = true; }
@@ -1419,92 +1422,182 @@ public partial class MainWindow : Window
         FindReplacePanel.Visibility = Visibility.Visible;
 
         var editor = GetCurrentEditor();
-        if (editor != null)
-        {
-            var sel = editor.SelectedText;
-            if (!string.IsNullOrEmpty(sel) && sel.Length < 200 && !sel.Contains('\n'))
-            {
-                FindReplacePanel.SetFindText(sel);
-            }
-            else
-            {
-                FindReplacePanel.SetFindText(_findText);
-            }
-        }
+        if (editor == null) return;
+
+        var sel = editor.SelectedText;
+        if (!string.IsNullOrEmpty(sel) && sel.Length < 200 && !sel.Contains('\n'))
+            FindReplacePanel.SetFindText(sel);
+        else
+            FindReplacePanel.SetFindText(_lastFind.Text);
     }
 
-    private void OnFindRequested(object sender, FindReplacePanel.FindReplaceArgs e)
+    /// <summary>
+    /// 把面板上的条件落成宿主状态：面板开着时每次动作都同步一次，
+    /// 关掉面板后 F3/F4 仍沿用最后一次条件（ND2 的行为）。
+    /// </summary>
+    private void CommitFindState()
     {
-        _findText = e.FindText;
-        _replaceText = e.ReplaceText;
-        _matchCase = e.MatchCase;
-        _matchWord = e.MatchWord;
-        _useRegex = e.Regex;
-
-        var editor = GetCurrentEditor();
-        if (editor == null || string.IsNullOrEmpty(_findText)) return;
-
-        int count = editor.HighlightAllMatches(_findText, _matchCase, _matchWord, _useRegex);
-        FindReplacePanel.SetMatchCount(count);
-        FindNext();
+        if (FindReplacePanel.Visibility != Visibility.Visible) return;
+        _lastFind = FindReplacePanel.CurrentFind;
+        _lastReplace = FindReplacePanel.CurrentReplace;
+        _wrapAround = FindReplacePanel.WrapAround;
+        _backwardSearch = FindReplacePanel.Backward;
+        FindReplacePanel.Remember(_lastFind.Text, _lastReplace);
     }
 
     private void OnFindNextRequested(object? sender, EventArgs e)
     {
-        var args = FindReplacePanel.GetArgsPublic();
-        if (args != null)
-        {
-            _findText = args.FindText;
-            _matchCase = args.MatchCase;
-            _matchWord = args.MatchWord;
-            _useRegex = args.Regex;
-        }
+        CommitFindState();
         FindNext();
     }
 
     private void OnFindPreviousRequested(object? sender, EventArgs e)
     {
-        var args = FindReplacePanel.GetArgsPublic();
-        if (args != null)
-        {
-            _findText = args.FindText;
-            _matchCase = args.MatchCase;
-            _matchWord = args.MatchWord;
-            _useRegex = args.Regex;
-        }
+        CommitFindState();
         FindPrevious();
     }
 
-    private void OnReplaceRequested(object sender, FindReplacePanel.FindReplaceArgs e)
+    /// <summary>ND2「计数(T)」：结果写状态栏（"计数 %1 次匹配 '%2'"），找不到时蜂鸣</summary>
+    private void OnCountRequested(object? sender, EventArgs e)
     {
-        _findText = e.FindText;
-        _replaceText = e.ReplaceText;
-        _matchCase = e.MatchCase;
-        _matchWord = e.MatchWord;
-        _useRegex = e.Regex;
-
+        CommitFindState();
         var editor = GetCurrentEditor();
-        if (editor == null || string.IsNullOrEmpty(_findText)) return;
-
-        editor.ReplaceCurrent(_findText, _replaceText, _matchCase, _matchWord, _useRegex);
+        if (editor == null || _lastFind.IsEmpty)
+        {
+            StatusBarMessage("查找字段为空");
+            return;
+        }
+        int count = editor.CountMatches(_lastFind);
+        FindReplacePanel.SetMatchCount(count);
+        StatusBarMessage($"计数 {count} 次匹配 '{_lastFind.Text}'");
+        if (count == 0) System.Media.SystemSounds.Beep.Play();
     }
 
-    private void OnReplaceAllRequested(object sender, FindReplacePanel.FindReplaceArgs e)
+    private void OnCountInFile(object sender, RoutedEventArgs e) => OnCountRequested(sender, e);
+
+    private void OnReplaceRequested(object? sender, EventArgs e)
     {
-        _findText = e.FindText;
-        _replaceText = e.ReplaceText;
-        _matchCase = e.MatchCase;
-        _matchWord = e.MatchWord;
-        _useRegex = e.Regex;
-
+        CommitFindState();
         var editor = GetCurrentEditor();
-        if (editor == null || string.IsNullOrEmpty(_findText)) return;
+        if (editor == null) return;
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("查找字段为空");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
 
-        int count = editor.ReplaceAll(_findText, _replaceText, _matchCase, _matchWord, _useRegex);
-        int remaining = editor.HighlightAllMatches(_findText, _matchCase, _matchWord, _useRegex);
-        FindReplacePanel.SetMatchCount(remaining);
+        editor.ReplaceCurrent(_lastFind, _lastReplace);
+        FindNext();
+    }
+
+    private void OnReplaceAllRequested(object? sender, EventArgs e)
+    {
+        CommitFindState();
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("查找字段为空");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
+
+        int count = editor.ReplaceAll(_lastFind, _lastReplace);
+        FindReplacePanel.SetMatchCount(editor.CountMatches(_lastFind));
         MessageBox.Show(this, $"替换完成，共替换 {count} 处。", "替换", MessageBoxButton.OK, MessageBoxImage.Information);
     }
+
+    /// <summary>
+    /// ND2 slot_replaceAllInOpenDoc（findwin.cpp:2379）：确认框 → 逐个文档全部替换，
+    /// 只读文档跳过，最后按「在打开的文档中替换：%1 处已经被替换。」汇报。
+    /// </summary>
+    private void OnReplaceAllInOpenedRequested(object? sender, EventArgs e)
+    {
+        CommitFindState();
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("查找字段为空");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
+        if (MessageBox.Show(this, "是否确认在所有打开的文档中替换？", "替换所有打开的文档",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+
+        int replaced = 0;
+        int touched = 0;
+        foreach (var doc in _documents)
+        {
+            var editor = GetEditor(doc);
+            if (editor == null || editor.ReadOnly) continue;      // 只读的文档不能替换
+            int count = editor.ReplaceAll(_lastFind, _lastReplace);
+            if (count > 0) touched++;
+            replaced += count;
+        }
+        StatusBarMessage($"在打开的文档中替换：{replaced} 处已经被替换。（{touched} 个文件）");
+    }
+
+    private void OnMarkRequested(object? sender, bool withBookmark)
+    {
+        CommitFindState();
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("标记字段为空！");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
+
+        int slot = FindReplacePanel.TakeMarkSlot();
+        int count = withBookmark ? editor.MarkAllWithBookmark(_lastFind, slot) : editor.MarkAll(_lastFind, slot);
+        FindReplacePanel.SetMatchCount(count);
+        StatusBarMessage(withBookmark ? $"已标记 {count} 处并加书签" : $"已标记 {count} 处");
+    }
+
+    /// <summary>ND2 Mark tab 的 Clear Mark：只清当前这个词的标记</summary>
+    private void OnClearMarkRequested(object? sender, EventArgs e)
+    {
+        CommitFindState();
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("标记字段为空");
+            return;
+        }
+        int cleared = editor.ClearMarkOf(_lastFind.Text);
+        StatusBarMessage($"已清除「{_lastFind.Text}」的 {cleared} 处标记");
+    }
+
+    /// <summary>ND2 的 Clear All / 工具栏「清除所有高亮」(F7)：五种标记色一起清</summary>
+    private void OnClearAllMarkRequested(object? sender, EventArgs e)
+    {
+        GetCurrentEditor()?.ClearAllMarks();
+        StatusBarMessage("已清除全部高亮");
+    }
+
+    private void ClearAllMarks()
+    {
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        editor.ClearAllMarks();
+        StatusBarMessage("已清除全部高亮");
+    }
+
+    /// <summary>ND2 工具栏「单词高亮」(F8)：选中就用选区，否则光标处的词；再按一次取消</summary>
+    private void WordHighlight()
+    {
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+        int slot = FindReplacePanel.TakeMarkSlot();
+        int count = editor.ToggleWordMark(slot);
+        StatusBarMessage(count == 0 ? "已取消当前单词的高亮" : $"已高亮当前单词：{count} 处");
+    }
+
+    private void OnWordHighlight(object sender, RoutedEventArgs e) => WordHighlight();
+
+    private void OnClearAllHighlight(object sender, RoutedEventArgs e) => ClearAllMarks();
 
     private void OnFindCloseRequested(object? sender, EventArgs e)
     {
@@ -1834,49 +1927,161 @@ public partial class MainWindow : Window
     /// <summary>结果列表对应的是哪个文档，跳转时即使已切标签也要回到它</summary>
     private Document? _searchHitsOwner;
 
+    /// <summary>「查找所有打开文件」时逐条命中的归属文档；用引用比较，避免相同行列的两条命中互相覆盖</summary>
+    private readonly Dictionary<SearchHit, Document> _searchHitOwners = new(ReferenceEqualityComparer.Instance);
+
     private void OnFindAllInFile(object sender, RoutedEventArgs e)
     {
-        // 查找面板里已有关键字时直接查，不再多问一次
-        if (!string.IsNullOrWhiteSpace(_findText))
+        CommitFindState();
+        if (_lastFind.IsEmpty)
         {
-            RunInFileSearch(new[] { _findText }, _matchCase, _useRegex);
+            StatusBarMessage("查找字段为空");
             return;
         }
-        OpenBatchFind();
+        RunInFileSearch(new[] { _lastFind.Text }, _lastFind);
     }
 
-    private void OnBatchFind(object sender, RoutedEventArgs e) => OpenBatchFind();
+    /// <summary>ND2「在当前文件中查找」：把查找框的条件当多关键词表来查当前文件</summary>
+    private void OnFindAllInCurrentDoc(object sender, RoutedEventArgs e) => OnFindAllInFile(sender, e);
+
+    /// <summary>
+    /// ND2「查找所有打开文件」：遍历所有标签页的缓冲区（含未保存内容），
+    /// 结果按标签页分组并列在同一个面板里，双击跳回命中的那个标签页。
+    /// </summary>
+    private void OnFindAllInOpenedFiles(object sender, RoutedEventArgs e)
+    {
+        CommitFindState();
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("查找字段为空");
+            return;
+        }
+        if (_documents.Count == 0)
+        {
+            StatusBarMessage("没有打开的文件");
+            return;
+        }
+
+        _searchHitOwners.Clear();
+        _searchHitsOwner = null;
+        var all = new List<SearchHit>();
+        int hitFiles = 0;
+        int askTimes = 0;
+        foreach (var doc in _documents)
+        {
+            var editor = GetEditor(doc);
+            if (editor == null) continue;
+
+            var hits = InFileSearch.FindAll(editor.GetContent(), new[] { _lastFind }, sourceLabel: doc.DisplayName);
+            if (hits.Count == 0) continue;
+            hitFiles++;
+            all.AddRange(hits);
+            foreach (var hit in hits) _searchHitOwners[hit] = doc;
+
+            if (all.Count >= InFileSearch.MaxHits) break;
+            // 与 ND2 一样，总数跨过 2000 / 4000 各问一次
+            if ((askTimes == 0 && all.Count > InFileSearch.AskAtFirst)
+                || (askTimes == 1 && all.Count > InFileSearch.AskAtSecond))
+            {
+                askTimes++;
+                if (!AskContinue(hitFiles, all.Count)) break;
+            }
+        }
+
+        SearchResultsPanel.ShowResults($"全部打开文件（{hitFiles}/{_documents.Count} 个文件命中）·「{_lastFind.Text}」", all);
+        StatusBarMessage($"查找完成，一共 {all.Count} 处发现在 {hitFiles} 个文件！");
+        GetCurrentEditor()?.ClearFindHighlight();
+    }
+
+    private void OnBatchFind(object sender, RoutedEventArgs e) => ShowBatchFind();
+
+    /// <summary>
+    /// ND2「提取正则结果到剪切板」(copyReResultBt)：只在正则模式可用，
+    /// 一边把结果列进结果面板，一边把每处匹配到的文本逐行写进剪切板。
+    /// </summary>
+    private void OnCopyRegexResultRequested(object? sender, EventArgs e)
+    {
+        CommitFindState();
+        var editor = GetCurrentEditor();
+        if (editor == null) return;
+
+        if (_lastFind.IsEmpty)
+        {
+            StatusBarMessage("查找字段为空");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
+        if (_lastFind.Mode != SearchMode.Regex)
+        {
+            StatusBarMessage("只在正则查找模式才能使用该功能！");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
+
+        RunInFileSearch(new[] { _lastFind.Text }, _lastFind);
+        var texts = editor.CollectMatchTexts(_lastFind);
+        if (texts.Count == 0)
+        {
+            StatusBarMessage($"没有找到 '{_lastFind.Text}'");
+            System.Media.SystemSounds.Beep.Play();
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(string.Join("\n", texts));
+            StatusBarMessage($"查找完成，一共 {texts.Count} 处发现，目标结果字段已经提取到剪切板。");
+        }
+        catch
+        {
+            StatusBarMessage("剪切板被其它程序占用，提取失败");
+        }
+    }
 
     private void RunFindAllShortcut() => OnFindAllInFile(this, new RoutedEventArgs());
 
-    private void OpenBatchFind()
+    /// <summary>ND2 是同一个非模态窗口（QPointer 单例），可边切标签边点动作</summary>
+    private BatchFindReplaceWindow? _batchFindWindow;
+
+    private void ShowBatchFind()
     {
-        string seed = GetCurrentEditor()?.SelectedText ?? string.Empty;
-        if (seed.Contains('\n')) seed = string.Empty;
-        var win = new BatchFindWindow(seed, _matchCase, _useRegex) { Owner = this };
-        if (win.ShowDialog() != true) return;
-        if (!string.IsNullOrWhiteSpace(win.Terms[0])) _findText = win.Terms[0];
-        RunInFileSearch(win.Terms, win.MatchCase, win.UseRegex);
+        if (_batchFindWindow != null)
+        {
+            _batchFindWindow.Activate();
+            return;
+        }
+        _batchFindWindow = new BatchFindReplaceWindow(GetCurrentEditor, FindReplacePanel.TakeMarkSlot) { Owner = this };
+        _batchFindWindow.Closed += (_, _) => _batchFindWindow = null;
+        _batchFindWindow.Show();
     }
 
-    private void RunInFileSearch(IReadOnlyList<string> terms, bool matchCase, bool useRegex)
+    private void RunInFileSearch(IReadOnlyList<string> terms, SearchCondition proto)
     {
         var doc = _currentDocument;
         var editor = GetCurrentEditor();
         if (doc == null || editor == null) return;
 
-        var hits = InFileSearch.FindAll(editor.GetContent(), terms, matchCase, useRegex);
+        var conditions = terms.Select(t => proto with { Text = t }).ToList();
+        var hits = InFileSearch.FindAll(editor.GetContent(), conditions, AskContinue, doc.DisplayName);
+        _searchHitOwners.Clear();
         _searchHitsOwner = doc;
-        SearchResultsPanel.ShowResults($"{doc.DisplayName} · {terms.Count} 个关键词", hits);
-        StatusBarMessage($"查找全部：{hits.Count} 处命中");
+        SearchResultsPanel.ShowResults($"{doc.DisplayName}（{terms.Count} 个关键词）", hits);
+        StatusBarMessage($"查找完成，一共 {hits.Count} 处发现。");
 
-        // 多关键词逐个调用会互相清掉高亮，只在单关键词时铺满编辑器
-        if (terms.Count == 1) editor.HighlightAllMatches(terms[0], matchCase, false, useRegex);
+        // ND2 的多关键词查找只出结果列表；编辑器高亮只有一个 indicator，单关键词时才铺
+        if (terms.Count == 1) editor.HighlightAllMatches(conditions[0]);
+        else editor.ClearFindHighlight();
     }
+
+    /// <summary>ND2 的「是否继续查找？」：命中数跨过阈值时询问，选否就停止收集</summary>
+    private bool AskContinue(int hitFiles, int matches)
+        => MessageBox.Show(this,
+               $"查找结果已经有 {matches} 处在 {hitFiles} 个文件中，结果太多会比较慢，是否继续查找？",
+               "是否继续查找？", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
 
     private void OnSearchHitJumpRequested(SearchHit hit)
     {
-        var doc = _searchHitsOwner ?? _currentDocument;
+        var doc = _searchHitOwners.TryGetValue(hit, out var owner) ? owner : _searchHitsOwner ?? _currentDocument;
         if (doc == null) return;
         if (!ReferenceEquals(doc, _currentDocument)) SelectDocument(doc);
 
@@ -1892,21 +2097,24 @@ public partial class MainWindow : Window
     {
         SearchResultsPanel.ClearResults();
         _searchHitsOwner = null;
+        _searchHitOwners.Clear();
         GetCurrentEditor()?.ClearFindHighlight();
     }
 
     private void FindNext()
     {
         var editor = GetCurrentEditor();
-        if (editor == null || string.IsNullOrEmpty(_findText)) return;
-        editor.FindNext(_findText, _matchCase, _matchWord, _useRegex);
+        if (editor == null || _lastFind.IsEmpty) return;
+        if (!editor.FindNext(_lastFind, _wrapAround, _backwardSearch))
+            StatusBarMessage($"没有找到「{_lastFind.Text}」");
     }
 
     private void FindPrevious()
     {
         var editor = GetCurrentEditor();
-        if (editor == null || string.IsNullOrEmpty(_findText)) return;
-        editor.FindPrevious(_findText, _matchCase, _matchWord, _useRegex);
+        if (editor == null || _lastFind.IsEmpty) return;
+        if (!editor.FindNext(_lastFind, _wrapAround, backward: true))
+            StatusBarMessage($"没有找到「{_lastFind.Text}」");
     }
 
     // ==================== 跳转到行 ====================

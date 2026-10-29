@@ -35,6 +35,25 @@ public class AppSettings
     /// <summary>目录查找上一次的目录与文件类型</summary>
     public string DirFindRoot { get; set; } = string.Empty;
     public string DirFindFilter { get; set; } = "*.*";
+    public bool DirFindSkipBinary { get; set; } = true;
+    public bool DirFindSkipBigFile { get; set; } = true;
+    public int DirFindMaxFileMb { get; set; } = 20;
+    public string DirFindSkipDirNames { get; set; } = "debug:Debug:.vs:.git:.svn";
+
+    /// <summary>查找/替换框的历史（最新在前，最多 25 条），与 ND2 查找窗的下拉一致</summary>
+    public List<string> FindHistory { get; set; } = new();
+    public List<string> ReplaceHistory { get; set; } = new();
+
+    /// <summary>标记色 1..5 与是否轮色（ND2 Mark tab 的颜色选择）</summary>
+    public int MarkColorSlot { get; set; } = 1;
+    public bool MarkColorLoop { get; set; } = true;
+
+    /// <summary>批量查找替换窗口上次的尺寸位置（ND2 用 saveGeometry 存 bfpos）</summary>
+    public string BatchFindGeometry { get; set; } = string.Empty;
+
+    /// <summary>查找结果面板：行数显示是否自动换行（ND2 结果区右键的 warp），0 表示没调过高度</summary>
+    public bool SearchResultsWrap { get; set; }
+    public double SearchResultsHeight { get; set; }
 
     public double WindowWidth { get; set; } = 1100;
     public double WindowHeight { get; set; } = 700;

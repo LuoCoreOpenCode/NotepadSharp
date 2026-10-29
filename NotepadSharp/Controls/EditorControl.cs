@@ -23,6 +23,25 @@ public partial class EditorControl : WindowsFormsHost
     // 查找高亮使用的 indicator 索引
     private const int FindIndicatorIndex = 8;
 
+    /// <summary>正则零长匹配时显示在原地的气泡文字（ND2 的 "find-regex-zero-length-match"）</summary>
+    private const string ZeroLengthMatchTip = "正则查找零长匹配";
+
+    // 标记色使用的 indicator 起始索引与数量，编号沿用 ND2 的 SCE_UNIVERSAL_FOUND_STYLE_EXT1..EXT5
+    private const int MarkIndicatorBase = 21;
+    public const int MarkColorCount = 5;
+
+    /// <summary>5 种标记色的默认值（0xRRGGBB），下标 i 对应 indicator 21+i，即 ND2 的 mark_style_(i+1)</summary>
+    public static readonly int[] MarkColors = { 0x00FFFF, 0xFFFF00, 0x0080FF, 0xFF0080, 0xFF8000 };
+
+    /// <summary>一条标记记录（对应 ND2 每个编辑器上的 m_curMarkList），F8 靠它判断要不要取消</summary>
+    private sealed class MarkRecord
+    {
+        public required string Text { get; init; }
+        public int Slot { get; set; }
+    }
+
+    private readonly List<MarkRecord> _markRecords = new();
+
     /// <summary>当前语言的注释前缀（由主窗口根据文件类型设置）</summary>
     public string CommentPrefix { get; set; } = "//";
 
@@ -124,6 +143,16 @@ public partial class EditorControl : WindowsFormsHost
         indicator.ForeColor = DrawingColor.FromArgb(0xFF, 0x2A, 0x7D, 0xD2);
         indicator.Alpha = 80;
         indicator.Under = true;
+
+        // ===== 标记色 indicator：槽位 n 用 indicator 20+n，颜色照 ND2 mark_style_1..5 的默认色 =====
+        for (int i = 0; i < MarkColorCount; i++)
+        {
+            var mark = _scintilla.Indicators[MarkIndicatorBase + i];
+            mark.Style = IndicatorStyle.RoundBox;
+            mark.ForeColor = DrawingColor.FromArgb(MarkColors[i]);
+            mark.Alpha = 130;
+            mark.Under = false;
+        }
 
         // ===== 右键菜单 =====
         _scintilla.ContextMenuStrip = BuildContextMenu();
@@ -616,89 +645,75 @@ public partial class EditorControl : WindowsFormsHost
 
     // ==================== 查找替换 ====================
 
-    private static SearchFlags BuildFlags(bool matchCase, bool matchWord, bool regex)
-    {
-        var flags = SearchFlags.None;
-        if (matchCase) flags |= SearchFlags.MatchCase;
-        if (matchWord) flags |= SearchFlags.WholeWord;
-        if (regex) flags |= SearchFlags.Regex;
-        return flags;
-    }
-
-    public int CountMatches(string text, bool matchCase, bool matchWord, bool regex)
-    {
-        if (string.IsNullOrEmpty(text)) return 0;
-
-        int count = 0;
-        _scintilla.SearchFlags = BuildFlags(matchCase, matchWord, regex);
-        _scintilla.TargetStart = 0;
-        _scintilla.TargetEnd = _scintilla.TextLength;
-
-        while (_scintilla.SearchInTarget(text) >= 0)
-        {
-            count++;
-            int newStart = _scintilla.TargetEnd;
-            if (newStart >= _scintilla.TextLength) break;
-            _scintilla.TargetStart = newStart;
-            _scintilla.TargetEnd = _scintilla.TextLength;
-        }
-        return count;
-    }
+    /// <summary>上一次命中的零长匹配位置，用于下一次查找时强行前进一格（-1 表示没有）</summary>
+    private int _zeroMatchPos = -1;
 
     /// <summary>
     /// 在 [startPos, endPos) 内查找，返回匹配区间的字节偏移。
     /// Scintilla 文档内部恒为 UTF-8，位置是字节偏移，所以必须用 TargetEnd 而不是
     /// 「起点 + 字符串长度」，否则含中文的匹配会选错范围。
     /// </summary>
-    private (int Start, int End)? FindRange(string text, bool matchCase, bool matchWord, bool regex, int startPos, int endPos)
+    private (int Start, int End)? FindRange(SearchCondition condition, int startPos, int endPos,
+                                            FindVerb verb = FindVerb.FindNext)
     {
-        if (string.IsNullOrEmpty(text)) return null;
+        string needle = condition.EffectiveText;
+        if (needle.Length == 0) return null;
 
-        _scintilla.SearchFlags = BuildFlags(matchCase, matchWord, regex);
+        _scintilla.SearchFlags = condition.ToScintillaFlags(verb);
         _scintilla.TargetStart = startPos;
         _scintilla.TargetEnd = endPos;
-        int pos = _scintilla.SearchInTarget(text);
+        int pos = _scintilla.SearchInTarget(needle);
         return pos >= 0 ? (pos, _scintilla.TargetEnd) : null;
     }
 
-    public int? FindNext(string text, bool matchCase, bool matchWord, bool regex)
+    /// <summary>
+    /// 查找下一处/上一处。backward 对应 ND2 的 Backward 复选框（同一个「查找下一个」按钮换方向），
+    /// wrap 对应 Wrap around：关掉后走到文档尽头就不再绕回另一端。
+    /// </summary>
+    public bool FindNext(SearchCondition condition, bool wrap, bool backward)
     {
-        var range = FindRange(text, matchCase, matchWord, regex, _scintilla.SelectionEnd, _scintilla.TextLength)
-                    ?? FindRange(text, matchCase, matchWord, regex, 0, _scintilla.TextLength);
-        if (range == null) return null;
+        if (condition.IsEmpty) return false;
 
-        var (start, end) = range.Value;
-        SelectRange(start, end);
-        return start;
+        int length = _scintilla.TextLength;
+        int caret = _scintilla.SelectionStart;
+        int tail = _scintilla.SelectionEnd;
+
+        // 上一次命中的是零长匹配：ND2 dealWithZeroFound 把 startpos 强行加 1，否则同一个位置会被反复找到
+        bool stepOverZero = _zeroMatchPos >= 0 && tail == _zeroMatchPos;
+        _zeroMatchPos = -1;
+        int from = stepOverZero ? tail + 1 : tail;
+        int to = Math.Max(0, stepOverZero ? caret - 1 : caret);
+
+        (int Start, int End)? hit = backward
+            ? LastInRange(condition, 0, to) ?? (wrap ? LastInRange(condition, 0, length) : null)
+            : FindRange(condition, from, length) ?? (wrap ? FindRange(condition, 0, to) : null);
+
+        if (hit == null) return false;
+
+        // 零宽匹配（如正则 ^）会把同一处反复找到，光标前移一格保证每次按键都有进展
+        if (hit.Value.Start == hit.Value.End)
+        {
+            _zeroMatchPos = hit.Value.Start;
+            _scintilla.SetSelection(hit.Value.Start, hit.Value.Start);
+            _scintilla.ScrollCaret();
+            // ND2 dealWithZeroFoundShowTip：零长匹配看不见，用 calltip 在原地说明一下
+            _scintilla.CallTipShow(hit.Value.Start, ZeroLengthMatchTip);
+            return true;
+        }
+
+        SelectRange(hit.Value.Start, hit.Value.End);
+        return true;
     }
 
-    public int? FindPrevious(string text, bool matchCase, bool matchWord, bool regex)
-    {
-        if (string.IsNullOrEmpty(text)) return null;
-
-        // 向前搜索 = 在 0..SelectionStart 内找最后一个匹配
-        int selStart = _scintilla.SelectionStart;
-        var best = LastInRange(text, matchCase, matchWord, regex, 0, selStart);
-
-        // 环绕：退而取后半段的最后一个匹配
-        best ??= LastInRange(text, matchCase, matchWord, regex, selStart, _scintilla.TextLength);
-
-        if (best == null) return null;
-
-        var (start, end) = best.Value;
-        SelectRange(start, end);
-        return start;
-    }
-
-    private (int Start, int End)? LastInRange(string text, bool matchCase, bool matchWord, bool regex, int startPos, int endPos)
+    private (int Start, int End)? LastInRange(SearchCondition condition, int startPos, int endPos)
     {
         (int Start, int End)? best = null;
         int searchPos = startPos;
 
-        // 每轮都从上一处匹配的下一个字节继续，总扫描量仍是线性
+        // 每轮从上一处匹配的下一个字节继续，总扫描量仍是线性
         while (searchPos < endPos)
         {
-            var found = FindRange(text, matchCase, matchWord, regex, searchPos, endPos);
+            var found = FindRange(condition, searchPos, endPos);
             if (found == null) break;
 
             best = found;
@@ -713,45 +728,90 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.ScrollCaret();
     }
 
-    public bool ReplaceCurrent(string findText, string replaceText, bool matchCase, bool matchWord, bool regex)
+    public int CountMatches(SearchCondition condition)
     {
-        if (string.IsNullOrEmpty(findText)) return false;
+        if (condition.IsEmpty) return 0;
 
-        _scintilla.SearchFlags = BuildFlags(matchCase, matchWord, regex);
+        int count = 0;
+        string needle = condition.EffectiveText;
+        _scintilla.SearchFlags = condition.ToScintillaFlags(FindVerb.FindNext);
+        _scintilla.TargetStart = 0;
+        _scintilla.TargetEnd = _scintilla.TextLength;
+
+        while (_scintilla.SearchInTarget(needle) >= 0)
+        {
+            count++;
+            // 零长匹配（正则 EMPTYMATCH_ALL 会给出）不前进就会原地打转，与 ND2 dealWithZeroFound 一样加 1
+            int newStart = _scintilla.TargetEnd > _scintilla.TargetStart
+                ? _scintilla.TargetEnd
+                : _scintilla.TargetStart + 1;
+            if (newStart >= _scintilla.TextLength) break;
+            _scintilla.TargetStart = newStart;
+            _scintilla.TargetEnd = _scintilla.TextLength;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// ND2「提取正则结果到剪切板」取的就是每处匹配的文本本身（targstart..targend），
+    /// 零长匹配不算结果，与 addCurFindRecord 里 getResult 分支的判断一致。
+    /// </summary>
+    public IReadOnlyList<string> CollectMatchTexts(SearchCondition condition)
+    {
+        var texts = new List<string>();
+        foreach (var (start, end) in FindRanges(condition))
+        {
+            if (end <= start) continue;
+            texts.Add(_scintilla.GetTextRange(start, end - start));
+        }
+        return texts;
+    }
+
+    public bool ReplaceCurrent(SearchCondition find, string replaceText)
+    {
+        if (find.IsEmpty) return false;
+
+        _scintilla.SearchFlags = find.ToScintillaFlags(FindVerb.ReplaceNext);
         _scintilla.TargetStart = _scintilla.SelectionStart;
         _scintilla.TargetEnd = _scintilla.SelectionEnd;
 
-        int pos = _scintilla.SearchInTarget(findText);
+        int pos = _scintilla.SearchInTarget(find.EffectiveText);
         if (pos < 0) return false;
 
-        if (regex)
-            _scintilla.ReplaceTargetRe(replaceText);
+        string replacement = find.PrepareReplacement(replaceText);
+        if (find.Mode == SearchMode.Regex)
+            _scintilla.ReplaceTargetRe(replacement);
         else
-            _scintilla.ReplaceTarget(replaceText);
+            _scintilla.ReplaceTarget(replacement);
         return true;
     }
 
-    public int ReplaceAll(string findText, string replaceText, bool matchCase, bool matchWord, bool regex)
+    public int ReplaceAll(SearchCondition find, string replaceText)
     {
-        if (string.IsNullOrEmpty(findText)) return 0;
+        if (find.IsEmpty) return 0;
 
         int count = 0;
+        string needle = find.EffectiveText;
+        string replacement = find.PrepareReplacement(replaceText);
         _scintilla.BeginUndoAction();
         try
         {
-            _scintilla.SearchFlags = BuildFlags(matchCase, matchWord, regex);
+            _scintilla.SearchFlags = find.ToScintillaFlags(FindVerb.ReplaceNext);
             _scintilla.TargetStart = 0;
             _scintilla.TargetEnd = _scintilla.TextLength;
 
-            while (_scintilla.SearchInTarget(findText) >= 0)
+            while (_scintilla.SearchInTarget(needle) >= 0)
             {
-                if (regex)
-                    _scintilla.ReplaceTargetRe(replaceText);
+                if (find.Mode == SearchMode.Regex)
+                    _scintilla.ReplaceTargetRe(replacement);
                 else
-                    _scintilla.ReplaceTarget(replaceText);
+                    _scintilla.ReplaceTarget(replacement);
                 count++;
 
-                int newStart = _scintilla.TargetEnd;
+                // ReplaceTarget 会把 target 挪到替换结果末尾，零长匹配时再往前让一格
+                int newStart = _scintilla.TargetEnd > _scintilla.TargetStart
+                    ? _scintilla.TargetEnd
+                    : _scintilla.TargetStart + 1;
                 if (newStart >= _scintilla.TextLength) break;
                 _scintilla.TargetStart = newStart;
                 _scintilla.TargetEnd = _scintilla.TextLength;
@@ -762,6 +822,25 @@ public partial class EditorControl : WindowsFormsHost
             _scintilla.EndUndoAction();
         }
         return count;
+    }
+
+    /// <summary>
+    /// 一次性换掉整篇文本（对应 ND2 replaceAtBack 的 REPLACETARGET 写法）：
+    /// 撤销栈里只留一个动作，且保留历史，不像 LoadContent 那样清空缓冲。
+    /// </summary>
+    public void ReplaceWholeText(string newText)
+    {
+        _scintilla.BeginUndoAction();
+        try
+        {
+            _scintilla.TargetStart = 0;
+            _scintilla.TargetEnd = _scintilla.TextLength;
+            _scintilla.ReplaceTarget(newText);
+        }
+        finally
+        {
+            _scintilla.EndUndoAction();
+        }
     }
 
     // ==================== 剪贴板安全包装 ====================
@@ -900,39 +979,168 @@ public partial class EditorControl : WindowsFormsHost
         _scintilla.Font = f;
     }
 
-    // ==================== 查找高亮 ====================
+    // ==================== 查找高亮与标记 ====================
 
     /// <summary>高亮所有匹配项</summary>
-    public int HighlightAllMatches(string text, bool matchCase, bool matchWord, bool regex)
+    public int HighlightAllMatches(SearchCondition condition)
     {
-        _scintilla.IndicatorCurrent = FindIndicatorIndex;
-        _scintilla.IndicatorClearRange(0, _scintilla.TextLength);
+        ClearFindHighlight();
+        if (condition.IsEmpty) return 0;
+        return FillIndicator(FindIndicatorIndex, condition);
+    }
 
-        if (string.IsNullOrEmpty(text)) return 0;
+    /// <summary>清除查找高亮</summary>
+    public void ClearFindHighlight() => ClearIndicator(FindIndicatorIndex);
 
-        int count = 0;
-        _scintilla.SearchFlags = BuildFlags(matchCase, matchWord, regex);
-        _scintilla.TargetStart = 0;
-        _scintilla.TargetEnd = _scintilla.TextLength;
+    /// <summary>
+    /// 标记全部匹配（ND2 查找窗 Mark tab）：colorSlot 取 1..5，对应五种标记色。
+    /// 标记走独立 indicator，不会把「查找」高亮一起冲掉，两者可以同时看到。
+    /// 命中的位置会记进 _markRecords，供 F8 的「同词再按一次取消高亮」使用。
+    /// </summary>
+    public int MarkAll(SearchCondition condition, int colorSlot)
+    {
+        if (condition.IsEmpty) return 0;
+        int slot = Math.Clamp(colorSlot, 1, MarkColorCount);
+        int count = FillIndicator(MarkIndicatorBase - 1 + slot, condition);
+        if (count > 0)
+            _markRecords.Add(new MarkRecord { Text = condition.Text, Slot = slot });
+        return count;
+    }
 
-        while (_scintilla.SearchInTarget(text) >= 0)
+    /// <summary>标记全部匹配并给这些行加书签（ND2 的 Mark &amp; Bookmark）</summary>
+    public int MarkAllWithBookmark(SearchCondition condition, int colorSlot)
+    {
+        int count = MarkAll(condition, colorSlot);
+        _scintilla.BeginUndoAction();
+        try
         {
-            int s = _scintilla.TargetStart;
-            int e = _scintilla.TargetEnd;
-            if (e <= s) break;
-            _scintilla.IndicatorFillRange(s, e - s);
-            count++;
-            if (e >= _scintilla.TextLength) break;
-            _scintilla.TargetStart = e;
-            _scintilla.TargetEnd = _scintilla.TextLength;
+            foreach (var (start, _) in FindRanges(condition))
+            {
+                _scintilla.Lines[_scintilla.LineFromPosition(start)].MarkerAdd(BookmarkMarkerIndex);
+            }
+        }
+        finally
+        {
+            _scintilla.EndUndoAction();
         }
         return count;
     }
 
-    /// <summary>清除查找高亮</summary>
-    public void ClearFindHighlight()
+    /// <summary>
+    /// 清除全部标记色并释放标记记录，对应 ND2 的 Clear All / 工具栏「清除所有高亮」(F7)。
+    /// 与 ND2 一致：这里不动书签，书签由书签菜单的 ClearAll BookMark 负责。
+    /// </summary>
+    public void ClearAllMarks()
     {
-        _scintilla.IndicatorCurrent = FindIndicatorIndex;
+        for (int i = 0; i < MarkColorCount; i++)
+            ClearIndicator(MarkIndicatorBase + i);
+        _markRecords.Clear();
+    }
+
+    /// <summary>
+    /// 只清掉某个词的标记，对应 ND2 Mark tab 的 Clear Mark
+    /// （clearHighlightWord(markTextBox 里的词)）。返回清掉的区间数。
+    /// </summary>
+    public int ClearMarkOf(string text)
+    {
+        if (text.Length == 0) return 0;
+        int cleared = 0;
+        foreach (var record in _markRecords.Where(r => string.Equals(r.Text, text, StringComparison.Ordinal)).ToList())
+        {
+            cleared += ClearIndicatorRanges(record.Slot, record.Text);
+            _markRecords.Remove(record);
+        }
+        return cleared;
+    }
+
+    /// <summary>
+    /// F8「单词高亮」（ND2 slot_wordHighlight）：有选区按选区，否则取光标处的词；
+    /// 已经用当前色标记过就取消，用别的色标记过就换成当前色重标。
+    /// </summary>
+    public int ToggleWordMark(int colorSlot)
+    {
+        string word = SelectedText;
+        if (word.Length == 0 || word.Contains('\n')) word = WordAtCaret();
+        if (word.Length == 0) return 0;
+
+        var record = _markRecords.LastOrDefault(r => string.Equals(r.Text, word, StringComparison.Ordinal));
+        if (record != null)
+        {
+            // 只清这一条记录占的区间，别的词的标记要留着
+            ClearIndicatorRanges(record.Slot, record.Text);
+            _markRecords.Remove(record);
+            if (record.Slot == colorSlot) return 0;
+        }
+
+        // ND2 走 markAllWord：区分大小写、不做全词匹配（中文全词匹配会漏）
+        return MarkAll(new SearchCondition(word, SearchMode.Normal, true, false), colorSlot);
+    }
+
+    private int ClearIndicatorRanges(int slot, string text)
+    {
+        var indicator = MarkIndicatorBase - 1 + Math.Clamp(slot, 1, MarkColorCount);
+        _scintilla.IndicatorCurrent = indicator;
+        int cleared = 0;
+        foreach (var (start, end) in FindRanges(new SearchCondition(text, SearchMode.Normal, true, false)))
+        {
+            if (end <= start) continue;
+            _scintilla.IndicatorClearRange(start, end - start);
+            cleared++;
+        }
+        return cleared;
+    }
+
+    /// <summary>光标处（或紧邻左侧）的词</summary>
+    public string WordAtCaret()
+    {
+        int caret = _scintilla.CurrentPosition;
+        if (caret <= 0 || caret > _scintilla.TextLength) return string.Empty;
+        int start = _scintilla.WordStartPosition(caret, true);
+        int end = _scintilla.WordEndPosition(caret, true);
+        if (end <= start) return string.Empty;
+        return _scintilla.GetTextRange(start, end - start);
+    }
+
+    private IEnumerable<(int Start, int End)> FindRanges(SearchCondition condition)
+    {
+        var ranges = new List<(int, int)>();
+        string needle = condition.EffectiveText;
+        if (needle.Length == 0) return ranges;
+
+        _scintilla.SearchFlags = condition.ToScintillaFlags();
+        _scintilla.TargetStart = 0;
+        _scintilla.TargetEnd = _scintilla.TextLength;
+
+        while (_scintilla.SearchInTarget(needle) >= 0)
+        {
+            int s = _scintilla.TargetStart;
+            int e = _scintilla.TargetEnd;
+            if (e < s) break;
+            ranges.Add((s, e));
+            if (e >= _scintilla.TextLength) break;
+            // 零宽匹配也要前进，否则这里会死循环
+            _scintilla.TargetStart = e > s ? e : s + 1;
+            _scintilla.TargetEnd = _scintilla.TextLength;
+        }
+        return ranges;
+    }
+
+    private int FillIndicator(int indicatorIndex, SearchCondition condition)
+    {
+        int count = 0;
+        _scintilla.IndicatorCurrent = indicatorIndex;
+        foreach (var (start, end) in FindRanges(condition))
+        {
+            if (end <= start) continue;
+            _scintilla.IndicatorFillRange(start, end - start);
+            count++;
+        }
+        return count;
+    }
+
+    private void ClearIndicator(int indicatorIndex)
+    {
+        _scintilla.IndicatorCurrent = indicatorIndex;
         _scintilla.IndicatorClearRange(0, _scintilla.TextLength);
     }
 }

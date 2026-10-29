@@ -4,13 +4,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using NotepadSharp.Services;
 using MessageBox = System.Windows.MessageBox;
+using TextBox = System.Windows.Controls.TextBox;
 using UserControl = System.Windows.Controls.UserControl;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 
 namespace NotepadSharp.Controls;
 
 /// <summary>
-/// 目录查找/替换面板：在宿主窗体底部展开，
+/// 目录查找/替换面板：在宿主窗体底部展开，对应 ND2 查找窗「在目录查找」那一页。
 /// 结果按文件分组，双击命中行跳转；替换直接按原编码写回磁盘。
 /// </summary>
 public partial class DirFindPanel : UserControl
@@ -27,6 +28,11 @@ public partial class DirFindPanel : UserControl
         InitializeComponent();
         var saved = SettingsService.Current;
         if (saved.DirFindFilter.Length > 0) FilterTextBox.Text = saved.DirFindFilter;
+        if (saved.DirFindSkipDirNames.Length > 0) SkipDirNamesTextBox.Text = saved.DirFindSkipDirNames;
+        MaxFileMbTextBox.Text = saved.DirFindMaxFileMb.ToString();
+        SkipBinaryCheckBox.IsChecked = saved.DirFindSkipBinary;
+        SkipBigFileCheckBox.IsChecked = saved.DirFindSkipBigFile;
+        RefreshHistory();
     }
 
     /// <summary>用当前文件所在目录或给定目录预填</summary>
@@ -34,46 +40,95 @@ public partial class DirFindPanel : UserControl
     {
         string root = !string.IsNullOrEmpty(rootPath) ? rootPath : SettingsService.Current.DirFindRoot;
         if (root.Length > 0) RootTextBox.Text = root;
-        if (!string.IsNullOrEmpty(keyword)) FindTextBox.Text = keyword;
-        FindTextBox.Focus();
-        FindTextBox.SelectAll();
+        if (!string.IsNullOrEmpty(keyword)) FindCombo.Text = keyword;
+        FindCombo.Focus();
+        if (FindCombo.Template?.FindName("PART_EditableTextBox", FindCombo) is TextBox box) box.SelectAll();
     }
 
     private DirSearchOptions BuildOptions(out string? error)
     {
         error = null;
         var root = RootTextBox.Text.Trim();
-        if (root.Length == 0 || !Directory.Exists(root))
+        if (root.Length == 0)
         {
-            error = "目录不存在";
+            error = "请选择目标文件夹！";
             return new DirSearchOptions();
         }
-        if (FindTextBox.Text.Length == 0)
+        if (!Directory.Exists(root))
         {
-            error = "请输入查找内容";
+            error = $"目标目录 {root} 不存在！";
+            return new DirSearchOptions();
+        }
+        if (FindCombo.Text.Length == 0)
+        {
+            error = "查找字段为空";
             return new DirSearchOptions();
         }
 
         return new DirSearchOptions
         {
             RootPath = root,
-            FindText = FindTextBox.Text,
-            FileFilter = FilterTextBox.Text,
-            Recursive = RecursiveCheckBox.IsChecked == true,
-            SkipHidden = SkipHiddenCheckBox.IsChecked == true,
+            FindText = FindCombo.Text,
+            ReplaceText = ReplaceCombo.Text,
+            Mode = ModeRegexRadio.IsChecked == true ? SearchMode.Regex
+                 : ModeExtendRadio.IsChecked == true ? SearchMode.Extend
+                 : SearchMode.Normal,
             MatchCase = MatchCaseCheckBox.IsChecked == true,
             WholeWord = WholeWordCheckBox.IsChecked == true,
-            Regex = RegexCheckBox.IsChecked == true,
+            SkipHidden = SkipHiddenCheckBox.IsChecked == true,
+            SkipChildDirs = SkipChildDirsCheckBox.IsChecked == true,
+            SkipBinary = SkipBinaryCheckBox.IsChecked == true,
+            SkipBigFile = SkipBigFileCheckBox.IsChecked == true,
+            MaxFileMb = ParseMb(MaxFileMbTextBox.Text),
+            FilterByFileType = FileTypeCheckBox.IsChecked == true,
+            FileFilter = FilterTextBox.Text,
+            SkipDirNames = SkipDirNamesCheckBox.IsChecked == true,
+            SkipDirNameList = SkipDirNamesTextBox.Text,
         };
     }
 
-    /// <summary>校验通过后记住目录与文件类型，下次打开面板直接可用</summary>
+    private static int ParseMb(string text)
+        => int.TryParse(text.Trim(), out int mb) && mb > 0 ? mb : 20;
+
+    /// <summary>校验通过后记住这次的条件，下次打开面板直接可用</summary>
     private void Remember(DirSearchOptions options)
     {
         var settings = SettingsService.Current;
         settings.DirFindRoot = options.RootPath;
         settings.DirFindFilter = options.FileFilter;
+        settings.DirFindSkipBinary = options.SkipBinary;
+        settings.DirFindSkipBigFile = options.SkipBigFile;
+        settings.DirFindMaxFileMb = options.MaxFileMb;
+        settings.DirFindSkipDirNames = options.SkipDirNameList;
         SettingsService.Save();
+    }
+
+    private void RefreshHistory()
+    {
+        var settings = SettingsService.Current;
+        FindCombo.ItemsSource = settings.FindHistory.ToArray();
+        ReplaceCombo.ItemsSource = settings.ReplaceHistory.ToArray();
+    }
+
+    /// <summary>ND2 在目录查找/替换后把关键字写进同一份查找历史</summary>
+    private void AddHistory(DirSearchOptions options)
+    {
+        var settings = SettingsService.Current;
+        bool changed = false;
+        if (options.FindText.Length > 0) { Prepend(settings.FindHistory, options.FindText); changed = true; }
+        if (options.ReplaceText.Length > 0) { Prepend(settings.ReplaceHistory, options.ReplaceText); changed = true; }
+        if (changed)
+        {
+            SettingsService.Save();
+            RefreshHistory();
+        }
+    }
+
+    private static void Prepend(List<string> history, string value)
+    {
+        history.RemoveAll(h => string.Equals(h, value, StringComparison.Ordinal));
+        history.Insert(0, value);
+        while (history.Count > 25) history.RemoveAt(history.Count - 1);
     }
 
     private void OnBrowse(object sender, RoutedEventArgs e)
@@ -108,22 +163,29 @@ public partial class DirFindPanel : UserControl
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
         Remember(options);
+        AddHistory(options);
         SetRunning(true);
 
         var progress = new Progress<DirProgress>(p =>
         {
             ProgressText.Text = p.Done
-                ? $"扫描 {p.FilesScanned} 个文件，命中 {p.MatchesFound} 处"
+                ? $"正在汇总：已扫描 {p.FilesScanned} 个文件，命中 {p.MatchesFound} 处"
                 : $"正在扫描 {p.FilesScanned} 个文件，命中 {p.MatchesFound} 处…{p.CurrentFile}";
         });
 
         var owner = Window.GetWindow(this);
+        // 询问要回到 UI 线程弹框，后台线程等结果（文案与 ND2 的 Continue Find ? 一致）
+        Func<int, int, bool> ask = (hitFiles, matches) => owner == null || owner.Dispatcher.Invoke(() =>
+            MessageBox.Show(owner,
+                $"查找结果已经有 {matches} 处在 {hitFiles} 个文件中，结果太多会比较慢，是否继续查找？",
+                "是否继续查找？", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
+
         _ = Task.Run(async () =>
         {
             try
             {
-                var results = await DirectorySearchService.SearchAsync(options, progress, token);
-                owner?.Dispatcher.BeginInvoke(() => ShowResults(results));
+                var summary = await DirectorySearchService.SearchAsync(options, progress, token, ask);
+                owner?.Dispatcher.BeginInvoke(() => ShowResults(summary));
             }
             catch (OperationCanceledException)
             {
@@ -140,11 +202,10 @@ public partial class DirFindPanel : UserControl
         }, token);
     }
 
-    private void ShowResults(List<DirFileResult> results)
+    private void ShowResults(DirectorySearchService.DirSearchSummary summary)
     {
         ResultTree.Items.Clear();
-        int total = 0;
-        foreach (var file in results)
+        foreach (var file in summary.Results)
         {
             var fileNode = new TreeViewItem
             {
@@ -158,14 +219,19 @@ public partial class DirFindPanel : UserControl
                     Header = $"行 {match.Line}: {match.LineText.Trim()}",
                     Tag = match,
                 });
-                total++;
             }
             ResultTree.Items.Add(fileNode);
-            fileNode.IsExpanded = results.Count <= 5;
+            fileNode.IsExpanded = summary.Results.Count <= 5;
         }
-        ProgressText.Text = total == 0
-            ? $"扫描完成，未找到「{FindTextBox.Text}」"
-            : $"{results.Count} 个文件，{total} 处命中（双击跳转）";
+        ProgressText.Text = summary.Matches == 0
+            ? $"查找完成，遍历 {summary.FilesWalked} 个文件，没有找到「{FindCombo.Text}」"
+            : $"查找完成，遍历 {summary.FilesWalked} 个文件，一共 {summary.Matches} 处发现在 {summary.HitFiles} 个文件！（双击跳转）";
+    }
+
+    private void OnClearResult(object sender, RoutedEventArgs e)
+    {
+        ResultTree.Items.Clear();
+        ProgressText.Text = "已清空结果。";
     }
 
     private void OnResultDoubleClick(object sender, MouseButtonEventArgs e)
@@ -193,33 +259,32 @@ public partial class DirFindPanel : UserControl
 
         var owner = Window.GetWindow(this);
         var confirm = MessageBox.Show(owner,
-            $"将在 {options.RootPath} 下的 {options.FileFilter} 文件中把「{options.FindText}」替换为「{ReplaceTextBox.Text}」。\n" +
-            "改动会直接写入磁盘（覆盖已打开的同名标签页）。是否继续？",
-            "目录替换", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            $"确定把「{options.FindText}」全部替换为「{options.ReplaceText}」吗？\n" +
+            $"目标目录：{options.RootPath}\n改动会直接写入磁盘（覆盖已打开的同名标签页）。",
+            "在目录文件中替换", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (confirm != MessageBoxResult.Yes) return;
 
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
-        string replaceText = ReplaceTextBox.Text;   // 后台线程不能直接读控件属性
         Remember(options);
+        AddHistory(options);
         SetRunning(true);
 
         var progress = new Progress<DirProgress>(p =>
             ProgressText.Text = p.Done
-                ? $"替换完成：{p.FilesScanned} 个文件，{p.MatchesFound} 处"
+                ? $"正在汇总：已替换 {p.FilesScanned} 个文件，{p.MatchesFound} 处"
                 : $"正在替换 {p.FilesScanned} 个文件，{p.MatchesFound} 处…{p.CurrentFile}");
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var (files, count, changed, skipped) = await DirectorySearchService.ReplaceAsync(
-                    options, replaceText, progress, token);
+                var (files, count, changed, skipped) = await DirectorySearchService.ReplaceAsync(options, progress, token);
                 owner?.Dispatcher.BeginInvoke(() =>
                 {
-                    ProgressText.Text = $"{files} 个文件、{count} 处已替换"
-                        + (skipped.Count > 0 ? $"；跳过 {skipped.Count} 个：" + string.Join("；", skipped.Take(5)) : string.Empty);
+                    ProgressText.Text = $"替换完成，遍历 {files} 个文件，一共 {count} 处替换！"
+                        + (skipped.Count > 0 ? $" 跳过 {skipped.Count} 个：" + string.Join("；", skipped.Take(5)) : string.Empty);
                     ResultTree.Items.Clear();
                     ReplaceCompleted?.Invoke(this, changed);
                 });
@@ -244,8 +309,10 @@ public partial class DirFindPanel : UserControl
     private void SetRunning(bool running)
     {
         StopButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
-        FindTextBox.IsEnabled = !running;
+        FindCombo.IsEnabled = !running;
         RootTextBox.IsEnabled = !running;
+        FindAllButton.IsEnabled = !running;
+        ReplaceAllButton.IsEnabled = !running;
     }
 
     private void OnClose(object sender, RoutedEventArgs e)

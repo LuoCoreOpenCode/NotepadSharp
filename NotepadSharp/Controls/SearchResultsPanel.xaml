@@ -8,28 +8,55 @@
     <Border Background="{DynamicResource PanelBackground}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,1" Padding="8,6">
         <DockPanel LastChildFill="True">
+            <!-- 上边缘拖条：改变面板高度并记住（ND2 的 findwinsize） -->
+            <Thumb x:Name="ResizeThumb" DockPanel.Dock="Top" Height="5" Margin="-8,-6,-8,3"
+                   Cursor="SizeNS" Background="{DynamicResource BorderBrush}"
+                   DragStarted="OnResizeStart" DragDelta="OnResizeDrag" DragCompleted="OnResizeDone"/>
+
+            <!-- 顶栏：与 ND2 结果区右键菜单同一组动作 -->
             <DockPanel DockPanel.Dock="Top" LastChildFill="True">
+                <!-- DockPanel.Dock=Right：先声明的在最右，故按视觉从左到右的逆序写 -->
                 <Button Content="✕ 关闭" Width="60" DockPanel.Dock="Right" Click="OnClose"/>
+                <Button Content="清空" Width="56" DockPanel.Dock="Right" Click="OnClear" Margin="4,0,0,0"/>
                 <Button Content="复制全部" Width="70" DockPanel.Dock="Right" Click="OnCopyAll" Margin="4,0,0,0"/>
+                <Button Content="复制选中行" Width="80" DockPanel.Dock="Right" Click="OnCopySelectedLine" Margin="4,0,0,0"/>
+                <Button Content="在结果中查找" Width="90" DockPanel.Dock="Right" Click="OnShowResultFind" Margin="4,0,0,0"
+                        ToolTip="ND2 结果区旁边的查找条（Ctrl+F）"/>
                 <Button Content="跳转" Width="56" DockPanel.Dock="Right" Click="OnJump" Margin="4,0,0,0"/>
                 <TextBlock x:Name="SummaryText" Foreground="{DynamicResource TextSecondaryBrush}"
                            VerticalAlignment="Center" Text="查找结果：双击一行可跳到对应位置。"/>
             </DockPanel>
 
-            <ListView x:Name="ResultList" Margin="0,6,0,0" Height="150"
+            <!-- 就地再查找条（ND2 TextFind：查找文本 + 上一个 / 下一个 / 关闭） -->
+            <DockPanel x:Name="ResultFindRow" DockPanel.Dock="Top" LastChildFill="True"
+                       Margin="0,4,0,0" Visibility="Collapsed">
+                <Button Content="✕" Width="28" DockPanel.Dock="Right" Click="OnCloseResultFind"/>
+                <Button Content="下一个" Width="60" DockPanel.Dock="Right" Click="OnResultFindNext" Margin="4,0,0,0"/>
+                <Button Content="上一个" Width="60" DockPanel.Dock="Right" Click="OnResultFindPrev" Margin="4,0,0,0"/>
+                <TextBlock Text="查找文本:" VerticalAlignment="Center" Margin="0,0,6,0"
+                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <TextBox x:Name="ResultFindBox" Padding="3,2" KeyDown="OnResultFindKeyDown"/>
+            </DockPanel>
+
+            <!-- 结果树：按文件分组，组节点可折叠，与 ND2 结果区的 fold 一致 -->
+            <TreeView x:Name="ResultTree" Margin="0,6,0,0" MinHeight="60"
                       Background="{DynamicResource EditorBackgroundBrush}"
                       BorderBrush="{DynamicResource BorderBrush}"
-                      MouseDoubleClick="OnResultDoubleClick"
-                      PreviewKeyDown="OnListKeyDown">
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="关键字" Width="140" DisplayMemberBinding="{Binding Term}"/>
-                        <GridViewColumn Header="行" Width="60" DisplayMemberBinding="{Binding Line}"/>
-                        <GridViewColumn Header="列" Width="60" DisplayMemberBinding="{Binding Column}"/>
-                        <GridViewColumn Header="内容" Width="520" DisplayMemberBinding="{Binding Preview}"/>
-                    </GridView>
-                </ListView.View>
-            </ListView>
+                      PreviewKeyDown="OnTreeKeyDown"
+                      MouseDoubleClick="OnResultDoubleClick">
+                <TreeView.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="全部折叠" Click="OnFoldAll"/>
+                        <MenuItem Header="全部展开" Click="OnExpandAll"/>
+                        <Separator/>
+                        <MenuItem Header="复制选中行" Click="OnCopySelectedLine"/>
+                        <MenuItem x:Name="WrapMenuItem" Header="自动换行" Click="OnToggleWrap"/>
+                        <Separator/>
+                        <MenuItem Header="清空" Click="OnClear"/>
+                        <MenuItem Header="关闭" Click="OnClose"/>
+                    </ContextMenu>
+                </TreeView.ContextMenu>
+            </TreeView>
         </DockPanel>
     </Border>
 </UserControl>

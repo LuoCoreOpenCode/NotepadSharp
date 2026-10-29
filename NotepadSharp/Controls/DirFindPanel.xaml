@@ -4,38 +4,72 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d"
-             d:DesignHeight="300" d:DesignWidth="900">
+             d:DesignHeight="320" d:DesignWidth="900">
     <Border Background="{DynamicResource PanelBackground}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,1" Padding="8,6">
         <DockPanel LastChildFill="True">
             <StackPanel DockPanel.Dock="Top">
-                <!-- 目录与文件类型 -->
+                <!-- 目标目录 + 文件类型 -->
                 <DockPanel LastChildFill="True">
                     <Button Content="浏览…" Width="60" DockPanel.Dock="Right" Click="OnBrowse" Margin="4,0,0,0"/>
                     <Button Content="✕ 关闭" Width="60" DockPanel.Dock="Right" Click="OnClose" Margin="4,0,0,0"/>
-                    <TextBlock Text="目录:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="目标目录:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
                     <TextBox x:Name="RootTextBox" Padding="3,2" Margin="0,0,8,0"/>
-                    <TextBlock Text="文件类型:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <CheckBox x:Name="FileTypeCheckBox" Content="文件类型:" IsChecked="True"
+                              VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextBrush}"/>
                     <TextBox x:Name="FilterTextBox" Width="150" Padding="3,2" Text="*.*"/>
-                    <CheckBox x:Name="RecursiveCheckBox" Content="递归" IsChecked="True" Margin="12,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
-                    <CheckBox x:Name="SkipHiddenCheckBox" Content="跳过隐藏" IsChecked="True" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
                 </DockPanel>
 
-                <!-- 查找与替换 -->
+                <!-- 查找目标 / 替换为 -->
                 <DockPanel LastChildFill="True" Margin="0,6,0,0">
-                    <Button Content="查找" Width="60" DockPanel.Dock="Right" Click="OnSearch"/>
-                    <Button Content="替换全部" Width="70" DockPanel.Dock="Right" Click="OnReplaceAll" Margin="4,0,0,0"/>
+                    <Button x:Name="FindAllButton" Content="查找所有" Width="70" DockPanel.Dock="Right" Click="OnSearch"/>
+                    <Button x:Name="ReplaceAllButton" Content="在目录文件中替换" Width="110" DockPanel.Dock="Right" Click="OnReplaceAll" Margin="4,0,0,0"/>
+                    <Button x:Name="ClearResultButton" Content="清空结果" Width="70" DockPanel.Dock="Right" Click="OnClearResult" Margin="4,0,0,0"/>
                     <Button x:Name="StopButton" Content="停止" Width="50" DockPanel.Dock="Right" Click="OnStop" Margin="4,0,0,0" Visibility="Collapsed"/>
-                    <TextBlock Text="查找:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                    <TextBox x:Name="FindTextBox" Padding="3,2" Margin="0,0,8,0" KeyDown="OnKeyDown"/>
-                    <TextBlock Text="替换:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                    <TextBox x:Name="ReplaceTextBox" Width="150" Padding="3,2"/>
-                    <CheckBox x:Name="MatchCaseCheckBox" Content="区分大小写" Margin="12,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
-                    <CheckBox x:Name="WholeWordCheckBox" Content="全字匹配" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
-                    <CheckBox x:Name="RegexCheckBox" Content="正则" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBlock Text="查找目标:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <ComboBox x:Name="FindCombo" IsEditable="True" Padding="3,2" Margin="0,0,8,0"
+                              KeyDown="OnKeyDown" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBlock Text="替换为:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <ComboBox x:Name="ReplaceCombo" IsEditable="True" Width="150" Padding="3,2"
+                              Foreground="{DynamicResource TextBrush}"/>
                 </DockPanel>
 
-                <TextBlock x:Name="ProgressText" Margin="0,6,0,0" Foreground="{DynamicResource TextSecondaryBrush}" Text="目录查找：填好目录与关键字后点「查找」，双击结果可跳到对应行。"/>
+                <!-- 匹配选项 + 查找模式 -->
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                    <CheckBox x:Name="MatchCaseCheckBox" Content="匹配大小写" Margin="0,0,10,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <CheckBox x:Name="WholeWordCheckBox" Content="全词匹配" Margin="0,0,16,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBlock Text="查找模式:" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <RadioButton x:Name="ModeNormalRadio" Content="普通" GroupName="DirSearchMode" IsChecked="True"
+                                 Margin="0,0,8,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <RadioButton x:Name="ModeRegexRadio" Content="正则表达式" GroupName="DirSearchMode"
+                                 Margin="0,0,8,0" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <RadioButton x:Name="ModeExtendRadio" Content="扩展(\n,\r,\t,\0,\x...)" GroupName="DirSearchMode"
+                                 VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                </StackPanel>
+
+                <!-- 跳过规则 -->
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                    <CheckBox x:Name="SkipChildDirsCheckBox" Content="跳过子目录" Margin="0,0,10,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <CheckBox x:Name="SkipHiddenCheckBox" Content="跳过隐藏文件" IsChecked="True" Margin="0,0,10,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <CheckBox x:Name="SkipBinaryCheckBox" Content="跳过二进制文件" IsChecked="True" Margin="0,0,10,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <CheckBox x:Name="SkipBigFileCheckBox" Content="跳过超过大小的文件" IsChecked="True" Margin="0,0,4,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBox x:Name="MaxFileMbTextBox" Width="42" Padding="3,2" Text="20"
+                             VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBlock Text="MB" Margin="4,0,16,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <CheckBox x:Name="SkipDirNamesCheckBox" Content="跳过目录名:" IsChecked="True" Margin="0,0,6,0"
+                              VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBox x:Name="SkipDirNamesTextBox" Width="220" Padding="3,2" Text="debug:Debug:.vs:.git:.svn"
+                             VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                </StackPanel>
+
+                <TextBlock x:Name="ProgressText" Margin="0,6,0,0" Foreground="{DynamicResource TextSecondaryBrush}"
+                           Text="目录查找：填好目标目录与关键字后点「查找所有」，双击结果可跳到对应行。"/>
             </StackPanel>
 
             <TreeView x:Name="ResultTree" Margin="0,6,0,0" Height="170"

@@ -199,12 +199,17 @@
                 <MenuItem Header="查找 / 替换..." Command="{Binding FindCommand}" InputGestureText="Ctrl+F"/>
                 <Separator/>
                 <MenuItem Header="查找下一个" Command="{Binding FindNextCommand}" InputGestureText="F3"/>
-                <MenuItem Header="查找上一个" Command="{Binding FindPreviousCommand}" InputGestureText="Shift+F3"/>
+                <MenuItem Header="查找上一个" Command="{Binding FindPreviousCommand}" InputGestureText="F4 / Shift+F3"/>
+                <MenuItem Header="计数(T)" Click="OnCountInFile"/>
                 <Separator/>
-                <MenuItem Header="在文件中查找 / 替换..." Click="OnShowDirFind" InputGestureText="Ctrl+Shift+A"/>
+                <MenuItem Header="在当前文件中查找" Click="OnFindAllInCurrentDoc" InputGestureText="Ctrl+Alt+F"/>
+                <MenuItem Header="查找所有打开文件" Click="OnFindAllInOpenedFiles" InputGestureText="Ctrl+Alt+Shift+F"/>
+                <MenuItem Header="在目录查找" Click="OnShowDirFind" InputGestureText="Ctrl+Shift+A"/>
                 <Separator/>
-                <MenuItem Header="查找全部（结果列表）" Click="OnFindAllInFile" InputGestureText="Ctrl+Alt+F"/>
-                <MenuItem Header="批量查找（多关键词）…" Click="OnBatchFind" InputGestureText="Ctrl+Alt+K"/>
+                <MenuItem Header="高亮单词（F8)" Click="OnWordHighlight"/>
+                <MenuItem Header="取消所有高亮（F7)" Click="OnClearAllHighlight"/>
+                <Separator/>
+                <MenuItem Header="批量查找替换…" Click="OnBatchFind" InputGestureText="Ctrl+Alt+K"/>
                 <Separator/>
                 <MenuItem Header="转到行..." Command="{Binding GoToLineCommand}" InputGestureText="Ctrl+G"/>
             </MenuItem>
@@ -494,11 +499,16 @@
         <!-- ==================== 底部：查找面板 + 状态栏 ==================== -->
         <StackPanel DockPanel.Dock="Bottom">
             <local:FindReplacePanel x:Name="FindReplacePanel" Visibility="Collapsed"
-                                    FindRequested="OnFindRequested"
-                                    ReplaceRequested="OnReplaceRequested"
-                                    ReplaceAllRequested="OnReplaceAllRequested"
                                     FindNextRequested="OnFindNextRequested"
                                     FindPreviousRequested="OnFindPreviousRequested"
+                                    CountRequested="OnCountRequested"
+                                    ReplaceRequested="OnReplaceRequested"
+                                    ReplaceAllRequested="OnReplaceAllRequested"
+                                    ReplaceAllInOpenedRequested="OnReplaceAllInOpenedRequested"
+                                    MarkRequested="OnMarkRequested"
+                                    ClearMarkRequested="OnClearMarkRequested"
+                                    ClearAllMarksRequested="OnClearAllMarkRequested"
+                                    CopyRegexResultRequested="OnCopyRegexResultRequested"
                                     CloseRequested="OnFindCloseRequested"/>
 
             <local:DirFindPanel x:Name="DirFindPanel" Visibility="Collapsed"
