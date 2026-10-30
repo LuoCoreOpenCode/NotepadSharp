@@ -11,5 +11,8 @@
   <ItemGroup>
     <!-- URL 状态机是纯函数、没有 UI 依赖，直接编真源码，省得再抄一份带来漂移 -->
     <Compile Include="..\..\NotepadSharp\Services\UrlScanner.cs" />
+    <!-- 编码检测/二进制判定同样没有 UI 依赖，编真源码 -->
+    <Compile Include="..\..\NotepadSharp\Services\EncodingService.cs" />
+    <Compile Include="..\..\NotepadSharp\Services\BinaryFileTypes.cs" />
   </ItemGroup>
 </Project>

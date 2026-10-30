@@ -1,4 +1,6 @@
-﻿# P2 的 UI 冒烟测试（注释三件套 / Tab 设置 / 视图开关 / URL 热点 / 缩进参考线持久化）：
+﻿# P2 的 UI 冒烟测试（注释三件套 / Tab 设置 / 视图开关 / URL 热点 / 缩进参考线持久化 /
+# 打开文件编码回归：UTF-16 BOM 不得误判二进制 + 解码失败才弹「打开为文本或二进制」+
+# 已知二进制后缀直开 hex）：
 # 真启动 NotepadSharp，用 UIA 点菜单（不注入键盘，不抢前台输入），
 # 直接对 Scintilla 子窗口收发 SCI_ 消息来摆内容、读结果。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File dev/uitest/smoke.ps1 [-Shot out.png]
@@ -131,16 +133,25 @@ function Find-Menu($root, [string]$name) {
 }
 
 function Invoke-Menu($root, [string[]]$names) {
+    $parent = $root
     for ($i = 0; $i -lt ($names.Count - 1); $i++) {
-        $parent = Find-Menu $root $names[$i]
-        if (-not $parent) { throw "找不到上级菜单：$($names[$i])" }
+        $found = Find-Menu $parent $names[$i]
+        if (-not $found) { $found = Find-Menu $root $names[$i] }
+        if (-not $found) { throw "找不到上级菜单：$($names[$i])" }
+        $parent = $found
         $ec = $null
         if (-not $parent.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$ec)) {
             throw "$($names[$i]) 不能展开"
         }
         $ec.Expand(); Start-Sleep -Milliseconds 350
     }
-    $leaf = Find-Menu $root $names[$names.Count - 1]
+    # 子菜单项进 UIA 树偶尔晚一拍，且弹层有时挂在上级菜单项下而不是主窗口下：两边都找，短暂重试
+    $leaf = $null
+    for ($i = 0; $i -lt 8 -and -not $leaf; $i++) {
+        if ($i -gt 0) { Start-Sleep -Milliseconds 250 }
+        $leaf = Find-Menu $parent $names[$names.Count - 1]
+        if (-not $leaf) { $leaf = Find-Menu $root $names[$names.Count - 1] }
+    }
     if (-not $leaf) { throw "找不到菜单项：$($names[$names.Count - 1])" }
     $inv = $null
     if (-not $leaf.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) {
@@ -151,6 +162,12 @@ function Invoke-Menu($root, [string[]]$names) {
 
 function Find-ChildByType($el, $controlType) {
     return $el.FindAll($ScopeDesc, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $controlType)))
+}
+
+# 原生 MessageBox 的按钮用 WM_COMMAND 按 ID 点：UIA 在跨进程 MessageBox 上不稳定
+function Click-MessageBox($hwnd, [int]$buttonId) {
+    [W]::SendMessage($hwnd, 0x0111, [IntPtr]$buttonId, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 500
 }
 
 function Click-Button($dlg, [string]$name) {
@@ -175,24 +192,31 @@ function Get-Root($hwnd) {
 }
 
 # ==================== 启动 ====================
+# 被测进程用独立设置目录（SettingsService 识别 NOTEPADSHARP_SETTINGS_DIR），
+# 全程不碰用户真实的 %APPDATA%\NotepadSharp\settings.json；上次跑崩遗留的实例和临时文件先清掉。
+function Stop-PadInstances {
+    Get-CimInstance Win32_Process -Filter "Name='NotepadSharp.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like '*uitest-*' } |
+        ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch { } }
+}
+function Remove-TestArtifacts {
+    Stop-PadInstances
+    foreach ($f in @($tmp, $u16, $nul, $bin, $png, $ext)) {
+        if ($f) { Remove-Item $f -ErrorAction SilentlyContinue }
+    }
+    Remove-Item $testSettingsDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Stop-PadInstances
+Get-ChildItem $env:TEMP -Filter "uitest-*" -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+$testSettingsDir = Join-Path $env:TEMP ("uitest-settings-" + [guid]::NewGuid().ToString("N"))
+$env:NOTEPADSHARP_SETTINGS_DIR = $testSettingsDir
+$settingsPath = Join-Path $testSettingsDir "settings.json"
+
 $tmp = Join-Path $env:TEMP ("uitest-" + [guid]::NewGuid().ToString("N") + ".txt")
 Set-Content -Path $tmp -Value "placeholder" -NoNewline
-
-# 后半段要正常关窗（触发 SaveSettings 落盘）来验缩进参考线持久化。为了让「出厂值」断言成立、
-# 又不在用户机器上留测试痕迹，启动前先把真实设置挪走，跑完（含异常中止）再原样放回。
-$settingsPath = Join-Path $env:APPDATA "NotepadSharp\settings.json"
-$settingsBak = "$settingsPath.uitestbak"
-if (Test-Path $settingsBak) { Move-Item $settingsBak $settingsPath -Force }   # 上次跑崩留下的
-$hadSettings = Test-Path $settingsPath
-if ($hadSettings) { Move-Item $settingsPath $settingsBak -Force }
-function Restore-Settings {
-    if ($hadSettings) {
-        if (Test-Path $settingsBak) { Move-Item $settingsBak $settingsPath -Force }
-    } else {
-        Remove-Item $settingsPath -ErrorAction SilentlyContinue
-    }
-    Remove-Item $settingsBak -ErrorAction SilentlyContinue
-}
 function Get-SettingProp([string]$name) {
     if (-not (Test-Path $settingsPath)) { return $null }
     return (Get-Content $settingsPath -Raw | ConvertFrom-Json).$name
@@ -205,13 +229,40 @@ function Close-MainWindow($rootEl) {
     $wp.Close()
 }
 
+# 按命令行参数起一个实例并等主窗口出来（打开文件的用例要反复起）
+function Start-PadInstance([string]$path) {
+    $proc = Start-Process -FilePath $Exe -ArgumentList "`"$path`"" -PassThru
+    $hwnd = [IntPtr]::Zero
+    for ($i = 0; $i -lt 60 -and $hwnd -eq [IntPtr]::Zero; $i++) {
+        Start-Sleep -Milliseconds 500
+        $proc.Refresh()
+        if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { $hwnd = $proc.MainWindowHandle }
+    }
+    if ($hwnd -eq [IntPtr]::Zero) {
+        try { $proc.Kill() } catch { }
+        throw "主窗口没出来：$path"
+    }
+    [W]::ShowWindow($hwnd, 3) | Out-Null      # 最大化，保证编辑器句柄真的建好
+    return @{ Proc = $proc; Hwnd = $hwnd }
+}
+
+# 等指定进程里出现标题含 titlePart 的顶层窗口（弹窗）
+function Wait-Window([int]$procId, [string]$titlePart) {
+    for ($i = 0; $i -lt 40; $i++) {
+        $h = [W]::FindTopWindow($procId, $titlePart)
+        if ($h -ne [IntPtr]::Zero) { return $h }
+        Start-Sleep -Milliseconds 250
+    }
+    return [IntPtr]::Zero
+}
+
 $p2 = $null
 $p = Start-Process -FilePath $Exe -ArgumentList "`"$tmp`"" -PassThru
 trap {
     if ($p) { try { $p.Kill() } catch { } }
     if ($p2) { try { $p2.Kill() } catch { } }
-    Restore-Settings
-    if ($tmp) { Remove-Item $tmp -ErrorAction SilentlyContinue }
+    foreach ($x in @($padU16, $padNul, $padBin1, $padBin2, $padPng, $padExt)) { if ($x) { try { $x.Proc.Kill() } catch { } } }
+    Remove-TestArtifacts
     Write-Host "中止：$($_.Exception.Message)"
     break
 }
@@ -465,6 +516,93 @@ Close-MainWindow $root2
 if (-not $p2.WaitForExit(15000)) { throw "第二个实例没退干净" }
 Check "再关窗后 indent 落盘为假" "False" (Get-SettingProp "ShowIndentGuide")
 
+# ==================== 打开文件编码回归 ====================
+# 用户报的 bug：UTF-16LE 带 BOM 的 汉化说明.txt 被判成二进制（UTF-16 文本本身就满是 0x00）。
+# ND2 的 getTextFileEncodeType（CmpareMode.cpp:101-117）先看 BOM，有 BOM 就不进二进制启发式。
+$u16 = Join-Path $env:TEMP ("uitest-u16-" + [guid]::NewGuid().ToString("N") + ".txt")
+[IO.File]::WriteAllBytes($u16, [byte[]](0xFF, 0xFE) + [Text.Encoding]::Unicode.GetBytes("一、更新历史`r`n1. 修复`r`n"))
+$padU16 = Start-PadInstance $u16
+[W]::Attach($padU16.Proc.Id)
+Start-Sleep -Milliseconds 1500
+Check "UTF-16LE BOM 文件不弹二进制提示" "True" ([W]::FindTopWindow($padU16.Proc.Id, "打开为文本或二进制") -eq [IntPtr]::Zero)
+$hSci3 = [W]::FindScintilla($padU16.Hwnd)
+Check "UTF-16LE BOM 文件按文本打开" "一、更新历史`r`n1. 修复`r`n" (Get-SciText $hSci3)
+try { $padU16.Proc.Kill() } catch { }
+
+# NUL 但 GBK 解得开：ND2 只按解码失败判定，不弹窗（旧的内容嗅探就是因此一直弹）
+$nul = Join-Path $env:TEMP ("uitest-nul-" + [guid]::NewGuid().ToString("N") + ".bin")
+[IO.File]::WriteAllBytes($nul, [byte[]](0x41, 0x00, 0x42, 0x00, 0x00, 0x90, 0x91, 0x43))
+$padNul = Start-PadInstance $nul
+[W]::Attach($padNul.Proc.Id)
+Start-Sleep -Milliseconds 1500
+Check "含 NUL 但 GBK 可解的 .bin 不弹提示" "True" ([W]::FindTopWindow($padNul.Proc.Id, "打开为文本或二进制") -eq [IntPtr]::Zero)
+$hSciNul = [W]::FindScintilla($padNul.Hwnd)
+Check "含 NUL 的 .bin 按文本打开（不是 hex）" "False" (Get-SciText $hSciNul).StartsWith("00000000")
+try { $padNul.Proc.Kill() } catch { }
+
+# 解码失败才弹三选一（ND2 scanFileOutPut 的 existGrbledCode）。
+# 0x81 0x20 是 GBK 里真正的非法序列；.NET 的 936 把 0xFF 映射成 U+F8F5 不报错，不能拿来当样例。
+# 后缀用 .txt，避开已知二进制后缀直开 hex 的分支。
+$bin = Join-Path $env:TEMP ("uitest-bin-" + [guid]::NewGuid().ToString("N") + ".txt")
+[IO.File]::WriteAllBytes($bin, [byte[]](0x41, 0x81, 0x20, 0x42, 0x43))
+
+$padBin1 = Start-PadInstance $bin
+[W]::Attach($padBin1.Proc.Id)
+$hDlg1 = Wait-Window $padBin1.Proc.Id "打开为文本或二进制"
+Check "二进制文件弹三选一提示" "True" ($hDlg1 -ne [IntPtr]::Zero)
+Click-Button (Get-Root $hDlg1) "以文本打开"
+Start-Sleep -Milliseconds 800
+$hSci4 = [W]::FindScintilla($padBin1.Hwnd)
+Check "选以文本打开后按文本载入（不是 hex dump）" "False" (Get-SciText $hSci4).StartsWith("00000000")
+try { $padBin1.Proc.Kill() } catch { }
+
+$padBin2 = Start-PadInstance $bin
+[W]::Attach($padBin2.Proc.Id)
+$hDlg2 = Wait-Window $padBin2.Proc.Id "打开为文本或二进制"
+Check "再开一次同样弹三选一提示" "True" ($hDlg2 -ne [IntPtr]::Zero)
+Click-Button (Get-Root $hDlg2) "以二进制打开"
+Start-Sleep -Milliseconds 800
+$hSci5 = [W]::FindScintilla($padBin2.Hwnd)
+Check "选以二进制打开后是 hex 视图" "True" (Get-SciText $hSci5).StartsWith("00000000")
+try { $padBin2.Proc.Kill() } catch { }
+
+# ==================== 外部修改提示（ND2 checkRoladFile） ====================
+# 同一笔写入 watcher 会发多个事件：选「否」后快照对齐，后续事件不得再弹；再次修改要能重新问。
+$ext = Join-Path $env:TEMP ("uitest-ext-" + [guid]::NewGuid().ToString("N") + ".txt")
+Set-Content -Path $ext -Value "before" -NoNewline
+$padExt = Start-PadInstance $ext
+[W]::Attach($padExt.Proc.Id)
+Start-Sleep -Milliseconds 1500
+$hSciExt = [W]::FindScintilla($padExt.Hwnd)
+Check "外部修改前内容是 before" "before" (Get-SciText $hSciExt)
+
+Set-Content -Path $ext -Value "after" -NoNewline
+$hDlgExt = Wait-Window $padExt.Proc.Id "外部变更"
+Check "外部修改后弹一次询问" "True" ($hDlgExt -ne [IntPtr]::Zero)
+Click-MessageBox $hDlgExt 7
+Start-Sleep -Milliseconds 1500
+Check "选否后不叠第二个框" "True" ([W]::FindTopWindow($padExt.Proc.Id, "外部变更") -eq [IntPtr]::Zero)
+Check "选否保留当前内容" "before" (Get-SciText $hSciExt)
+
+Set-Content -Path $ext -Value "after2" -NoNewline
+$hDlgExt2 = Wait-Window $padExt.Proc.Id "外部变更"
+Check "再次外部修改还会问" "True" ($hDlgExt2 -ne [IntPtr]::Zero)
+Click-MessageBox $hDlgExt2 6
+Start-Sleep -Milliseconds 1200
+Check "选是重新载入磁盘内容" "after2" (Get-SciText $hSciExt)
+try { $padExt.Proc.Kill() } catch { }
+
+# 已知二进制后缀直接进 hex，不询问（ND2 ccnotepad.cpp:5417 / doctypelistview.cpp:21）
+$png = Join-Path $env:TEMP ("uitest-png-" + [guid]::NewGuid().ToString("N") + ".png")
+[IO.File]::WriteAllBytes($png, [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01))
+$padPng = Start-PadInstance $png
+[W]::Attach($padPng.Proc.Id)
+Start-Sleep -Milliseconds 1500
+Check "png 直接进 hex 不弹提示" "True" ([W]::FindTopWindow($padPng.Proc.Id, "打开为文本或二进制") -eq [IntPtr]::Zero)
+$hSci6 = [W]::FindScintilla($padPng.Hwnd)
+Check "png 内容是 hex dump" "True" (Get-SciText $hSci6).StartsWith("00000000")
+try { $padPng.Proc.Kill() } catch { }
+
 # ==================== 收尾 ====================
 if ($Shot -ne "") {
     $r = New-Object W+RECT
@@ -477,7 +615,6 @@ if ($Shot -ne "") {
 }
 
 try { $p.Kill() } catch { }
-Restore-Settings
-Remove-Item $tmp -ErrorAction SilentlyContinue
+Remove-TestArtifacts
 Write-Host $(if ($script:fail -eq 0) { "全部通过" } else { "$($script:fail) 条失败" })
 exit $(if ($script:fail -eq 0) { 0 } else { 1 })

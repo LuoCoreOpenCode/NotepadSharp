@@ -42,7 +42,9 @@ if ($NoSetup) { Write-Host "publish 完成：$publishDir" -ForegroundColor Green
 $iscc = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
-    'C:\Program Files\Inno Setup 6\ISCC.exe'
+    'C:\Program Files\Inno Setup 6\ISCC.exe',
+    # Inno Setup 也可以装到自定义目录，装在哪个盘就用哪个（本机现装在 D:\LuoSoftware）
+    'D:\LuoSoftware\Inno Setup 6\ISCC.exe'
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) {
     throw '找不到 ISCC.exe。先装 Inno Setup 6：winget install -e --id JRSoftware.InnoSetup'
